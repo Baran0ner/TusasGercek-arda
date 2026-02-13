@@ -1,0 +1,72 @@
+{
+  "label": "18ply",
+  "total": 95.75000000000001,
+  "seq": [
+    -45,
+    45,
+    0,
+    90,
+    0,
+    -45,
+    45,
+    90,
+    0,
+    0,
+    90,
+    45,
+    -45,
+    0,
+    90,
+    0,
+    45,
+    -45
+  ],
+  "R1": {
+    "score": 20.0,
+    "weight": 20.0,
+    "loss": 0.0
+  },
+  "R2": {
+    "score": 12.0,
+    "weight": 12.0,
+    "loss": 0.0
+  },
+  "R3": {
+    "score": 13.0,
+    "weight": 13.0,
+    "loss": 0.0
+  },
+  "R4": {
+    "score": 12.0,
+    "weight": 12.0,
+    "loss": 0.0
+  },
+  "R5": {
+    "score": 6.57,
+    "weight": 8.0,
+    "loss": 1.43
+  },
+  "R6": {
+    "score": 20.38,
+    "weight": 21.0,
+    "loss": 0.62
+  },
+  "R7": {
+    "score": 6.54,
+    "weight": 7.0,
+    "loss": 0.46
+  },
+  "R8": {
+    "score": 5.26,
+    "weight": 7.0,
+    "loss": 1.74
+  },
+  "grouping": {
+    "adjacent_pairs": 1,
+    "group_runs": 1,
+    "groups_len_2": 1,
+    "groups_len_3": 0,
+    "groups_len_ge4": 0,
+    "max_run": 2
+  }
+}
