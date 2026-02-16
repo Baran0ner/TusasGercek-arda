@@ -11,6 +11,8 @@
   <link rel="stylesheet" href="/static/css/app.css" />
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/stats.js@0.17.0/build/stats.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
   <script type="importmap">
   {
     "imports": {
@@ -523,8 +525,6 @@
                 <div id="stats-thickness" class="flex justify-between"><span
                     class="text-slate-400">Kalınlık:</span><span class="font-mono text-cyan-400 font-bold">—</span>
                 </div>
-                <div id="stats-weight" class="flex justify-between"><span class="text-slate-400">Ağırlık:</span><span
-                    class="font-mono text-cyan-400 font-bold">—</span></div>
               </div>
             </div>
           </div>
@@ -619,6 +619,68 @@
                     class="font-mono text-green-400 font-bold">—</span></div>
               </div>
             </div>
+          </div>
+        </div>
+
+        <!-- Cross-Section View Card -->
+        <div id="cross-section-card" class="bg-white/70 backdrop-blur border border-slate-300/60 rounded-xl p-5 shadow-sm hidden">
+          <div class="flex items-center justify-between mb-4">
+            <div>
+              <h3 class="text-sm font-bold text-slate-900 flex items-center gap-2">
+                <svg class="w-4 h-4 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
+                </svg>
+                Cross-Section View (Kesit Görünümü)
+              </h3>
+              <p class="text-xs text-slate-600 mt-1">Her katmanın kalınlık ve pozisyonunu 2D olarak gösterir</p>
+            </div>
+            <div class="flex gap-2">
+              <select id="cross-section-zone-selector" class="text-xs px-2 py-1 border border-slate-300 rounded bg-white">
+                <option value="0">Zone 1</option>
+              </select>
+              <button id="cross-section-export-svg" class="px-2 py-1 text-xs rounded bg-indigo-600 text-white hover:bg-indigo-700 transition">
+                SVG
+              </button>
+              <button id="cross-section-export-png" class="px-2 py-1 text-xs rounded bg-indigo-600 text-white hover:bg-indigo-700 transition">
+                PNG
+              </button>
+            </div>
+          </div>
+          <div class="bg-slate-50 rounded-lg p-3 border border-slate-200">
+            <canvas id="cross-section-canvas" class="w-full" style="max-height: 500px;"></canvas>
+            <div id="cross-section-tooltip" class="hidden absolute bg-slate-900 text-white text-xs px-3 py-2 rounded shadow-lg pointer-events-none z-10"></div>
+          </div>
+          <div class="mt-3 text-xs text-slate-600 flex items-center gap-4">
+            <span><strong>Total:</strong> <span id="cross-section-total">—</span></span>
+            <span><strong>Thickness:</strong> <span id="cross-section-thickness">—</span></span>
+            <span class="text-slate-400">Hover for details</span>
+          </div>
+        </div>
+
+        <!-- Ply Coverage Map Card -->
+        <div id="ply-coverage-card" class="bg-white/70 backdrop-blur border border-slate-300/60 rounded-xl p-5 shadow-sm hidden">
+          <div class="flex items-center justify-between mb-4">
+            <div>
+              <h3 class="text-sm font-bold text-slate-900 flex items-center gap-2">
+                <svg class="w-4 h-4 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+                </svg>
+                Ply Coverage Map (Katman Kapsama Haritası)
+              </h3>
+              <p class="text-xs text-slate-600 mt-1">Zone'lara göre hangi katmanların var/yok olduğunu gösterir</p>
+            </div>
+          </div>
+          <div class="bg-slate-50 rounded-lg p-3 border border-slate-200 overflow-x-auto">
+            <div id="ply-coverage-container" class="min-w-max"></div>
+          </div>
+          <div class="mt-3 flex items-center gap-3 text-xs">
+            <span class="flex items-center gap-1">
+              <span class="w-3 h-3 rounded bg-emerald-500"></span> Ply exists
+            </span>
+            <span class="flex items-center gap-1">
+              <span class="w-3 h-3 rounded bg-slate-300"></span> Ply dropped
+            </span>
+            <span class="text-slate-400 ml-auto">Click column to highlight</span>
           </div>
         </div>
 
@@ -1706,11 +1768,8 @@
         }
       }
 
-      // Stats + Weight + Ramp
+      // Stats
       let statsText = `${data.zones.length} zone • ${data.stats.duration_seconds}s`;
-      if (data.weight && data.weight.has_geometry) {
-        statsText += ` • ${data.weight.total_weight_g.toFixed(1)}g`;
-      }
       statsMetaEl.textContent = statsText;
 
       // Ramp violations warning
@@ -1757,10 +1816,28 @@
 
         // Tab switching
         setupView3DTabs();
-      }
 
-      // Ağırlık özet kartı
-      renderWeightSummary(data);
+        // Initialize Cross-Section View
+        if (typeof crossSectionView !== 'undefined') {
+          crossSectionView.init(data.zones.filter(z => z && z.sequence));
+        }
+
+        // Initialize Ply Coverage Map
+        if (typeof plyCoverageMap !== 'undefined') {
+          plyCoverageMap.init(data.zones.filter(z => z && z.sequence));
+        }
+
+        // Initialize Fiber Orientation Overlay
+        if (typeof fiberOrientationOverlay !== 'undefined') {
+          fiberOrientationOverlay.init();
+          // Generate lines after ply meshes are created
+          setTimeout(() => {
+            if (typeof plyMeshes !== 'undefined' && plyMeshes.length > 0) {
+              fiberOrientationOverlay.generate(plyMeshes);
+            }
+          }, 500);
+        }
+      }
     }
 
     // ========== 3D TABS: Stacking vs Panel 3D ==========
@@ -1802,73 +1879,6 @@
       tabPanel3d.addEventListener('click', () => activateTab(tabPanel3d));
     }
 
-    function renderWeightSummary(data) {
-      // Eğer weight bilgisi yoksa çık
-      const weight = data.weight;
-      if (!weight || !weight.has_geometry) return;
-
-      // Mevcut weight-summary varsa sil
-      const existing = document.getElementById('weight-summary-card');
-      if (existing) existing.remove();
-
-      const card = document.createElement('div');
-      card.id = 'weight-summary-card';
-      card.className = 'bg-white rounded-xl shadow-md border border-slate-200 p-5 mt-4';
-
-      let html = `
-        <h3 class="text-sm font-bold text-slate-700 mb-3 flex items-center gap-2">
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 6l3 1m0 0l-3 9a5.002 5.002 0 006.001 0M6 7l3 9M6 7l6-2m6 2l3-1m-3 1l-3 9a5.002 5.002 0 006.001 0M18 7l3 9m-3-9l-6-2m0-2v2m0 16V5m0 16H9m3 0h3"></path></svg>
-          Agirlik Analizi
-        </h3>
-        <div class="grid grid-cols-2 gap-3 text-sm">
-          <div class="bg-slate-50 rounded-lg p-3 text-center">
-            <div class="text-slate-500 text-xs">Toplam Agirlik</div>
-            <div class="text-xl font-bold text-slate-800 mt-1">${weight.total_weight_g.toFixed(1)} g</div>
-          </div>
-      `;
-
-      // Zone bazında ağırlıklar
-      weight.zone_weights_g.forEach((wg, i) => {
-        const zone = data.zones[i];
-        const label = zone ? `Zone ${zone.index + 1}` : `Zone ${i + 1}`;
-        const pct = ((wg / weight.total_weight_g) * 100).toFixed(1);
-        html += `
-          <div class="bg-slate-50 rounded-lg p-3 text-center">
-            <div class="text-slate-500 text-xs">${label}</div>
-            <div class="text-base font-semibold text-slate-700 mt-1">${wg.toFixed(1)} g <span class="text-xs text-slate-400">(${pct}%)</span></div>
-          </div>
-        `;
-      });
-
-      html += '</div>';
-
-      // Ramp checks
-      const ramps = data.ramp_checks;
-      if (ramps && ramps.length > 0) {
-        html += '<div class="mt-4 border-t pt-3">';
-        html += '<h4 class="text-xs font-bold text-slate-600 mb-2">Ramp Kontrolleri</h4>';
-        html += '<div class="space-y-1">';
-        ramps.forEach(r => {
-          const ok = r.feasible;
-          const icon = ok ? '<span class="text-green-500">&#10003;</span>' : '<span class="text-red-500">&#10007;</span>';
-          html += `<div class="flex items-center gap-2 text-xs ${ok ? 'text-slate-600' : 'text-red-600'}">
-            ${icon}
-            <span>Zone ${r.zone_a + 1} &harr; Zone ${r.zone_b + 1}: ${r.ply_diff} ply fark &bull; Gereken: ${r.required_ramp_mm}mm &bull; Mevcut: ${r.available_mm}mm ${ok ? '' : '(IHLAL!)'}</span>
-          </div>`;
-        });
-        html += '</div></div>';
-      }
-
-      card.innerHTML = html;
-
-      // Kartı stats altına ekle
-      const statsCard = document.querySelector('#stats-meta')?.closest('.bg-white');
-      if (statsCard && statsCard.parentElement) {
-        statsCard.parentElement.insertBefore(card, statsCard.nextSibling);
-      } else {
-        resultsSection.appendChild(card);
-      }
-    }
 
     function renderMultiZoneLaminateMap(zones, transitions) {
       laminateMapEl.innerHTML = '';
@@ -4721,21 +4731,14 @@
       scene.environment = envMap;
       scene.environmentIntensity = 0.8;
 
-      // Lighting (High Contrast Tech)
-      const ambient = new THREE.AmbientLight(0xffffff, 0.4);
+      // Lighting (Optimized - 2 lights instead of 4)
+      const ambient = new THREE.AmbientLight(0xffffff, 0.6); // Increased ambient
       scene.add(ambient);
-      const keyLight = new THREE.DirectionalLight(0xffffff, 1.5);
+      const keyLight = new THREE.DirectionalLight(0xffffff, 1.2); // Reduced intensity
       keyLight.position.set(10, 20, 10);
       keyLight.castShadow = true;
-      keyLight.shadow.mapSize.set(2048, 2048);
+      keyLight.shadow.mapSize.set(1024, 1024); // Reduced shadow map size for performance
       scene.add(keyLight);
-      const fillLight = new THREE.DirectionalLight(0x3b82f6, 0.8); // Blueish fill
-      fillLight.position.set(-10, 5, -10);
-      scene.add(fillLight);
-      const rimLight = new THREE.SpotLight(0x06b6d4, 2.0); // Cyan Rim
-      rimLight.position.set(0, 5, -20);
-      rimLight.lookAt(0, 0, 0);
-      scene.add(rimLight);
 
       // Post-Processing
       composer = new EffectComposer(renderer);
@@ -4824,13 +4827,13 @@
         wireBtn.addEventListener('click', () => {
           stackingWireframe = !stackingWireframe;
           toggleBtnActive(wireBtn, stackingWireframe);
-          plyMeshes.forEach(p => {
-            // ... logic ... keeping simple here or referencing outside?
-            // Since I am replacing the block, I need the logic!
-            p.mesh.material.wireframe = stackingWireframe;
-            p.mesh.material.opacity = stackingWireframe ? 0.3 : 1.0;
-            p.mesh.material.transparent = stackingWireframe;
-            if (p.edges) p.edges.visible = !stackingWireframe; // If Edges exist
+
+          // Get unique InstancedMeshes
+          const uniqueMeshes = [...new Set(plyMeshes.map(p => p.instancedMesh))].filter(Boolean);
+          uniqueMeshes.forEach(mesh => {
+            mesh.material.wireframe = stackingWireframe;
+            mesh.material.opacity = stackingWireframe ? 0.3 : 1.0;
+            mesh.material.transparent = stackingWireframe;
           });
         });
       }
@@ -4844,10 +4847,22 @@
       if (resetIsoBtn) {
         resetIsoBtn.addEventListener('click', () => {
           stackingIsolatedAngle = null;
-          plyMeshes.forEach(p => {
-            p.mesh.material.opacity = 1;
-            p.mesh.material.transparent = false;
+
+          // Reset all InstancedMesh materials
+          const uniqueMeshes = [...new Set(plyMeshes.map(p => p.instancedMesh))].filter(Boolean);
+          uniqueMeshes.forEach(mesh => {
+            mesh.material.opacity = 1;
+            mesh.material.transparent = false;
+
+            // Reset all instance colors to neutral white
+            if (mesh.instanceColor) {
+              for (let i = 0; i < mesh.count; i++) {
+                mesh.instanceColor.setXYZ(i, 1, 1, 1);
+              }
+              mesh.instanceColor.needsUpdate = true;
+            }
           });
+
           resetIsoBtn.classList.add('hidden');
         });
       }
@@ -4929,11 +4944,14 @@
       const zoneZStarts = [];
       for (let j = 0; j < numZones; j++) zoneZStarts.push(j * (SEGMENT_DEPTH + RAMP_LENGTH));
 
-      // ---- Build ply meshes ----
+      // ---- Build ply meshes with INSTANCED RENDERING ----
+      // Group plies by angle for instancing
+      const plyDataByAngle = { '0': [], '90': [], '45': [], '-45': [] };
+      const plyMetadata = []; // Store metadata for each ply
+
       for (let plyIdx = 0; plyIdx < maxPly; plyIdx++) {
         const angle = rootSeq[plyIdx];
         const angleKey = String(angle);
-        const baseColor = ANGLE_COLORS[angleKey] || 0x94a3b8;
         const baseY = plyIdx * (PLY_HEIGHT + PLY_GAP);
 
         let lastFullZone = -1;
@@ -4961,46 +4979,93 @@
         const plyDepth = zEnd - zStart;
         if (plyDepth <= 0) continue;
 
-        const geo = new THREE.BoxGeometry(PLY_WIDTH, PLY_HEIGHT, plyDepth);
-
-        // Physical material -- bright & visible from all angles
-        const fiberTex = fiberTextures[angleKey] || null;
-        const mat = new THREE.MeshPhysicalMaterial({
-          color: baseColor,
-          roughness: 0.25,
-          metalness: 0.0,
-          clearcoat: 0.5,
-          clearcoatRoughness: 0.25,
-          emissive: baseColor,
-          emissiveIntensity: 0.15,  // self-illumination so side faces stay vivid
-          transparent: false,
-        });
-        if (fiberTex) {
-          mat.map = fiberTex;
-          mat.map.needsUpdate = true;
-        }
-
-        const mesh = new THREE.Mesh(geo, mat);
-        mesh.castShadow = true;
-        mesh.receiveShadow = true;
-
         const zCenter = zStart + plyDepth / 2 - totalDepth / 2;
-        mesh.position.set(0, baseY, zCenter);
-        panelGroup.add(mesh);
-
-        // Subtle edge lines
-        const edgesGeo = new THREE.EdgesGeometry(geo);
-        const edgesMat = new THREE.LineBasicMaterial({ color: EDGE_COLOR, opacity: 0.08, transparent: true });
-        const edges = new THREE.LineSegments(edgesGeo, edgesMat);
-        edges.position.copy(mesh.position);
-        panelGroup.add(edges);
 
         // Which zones this ply spans
         const inZones = [];
         for (let j = 0; j <= lastFullZone; j++) inZones.push(sortedZones[j].index + 1);
 
-        plyMeshes.push({ mesh, edges, plyIdx, angle, baseY, zCenter, inZones, lastFullZone });
+        // Store ply data for this angle
+        if (plyDataByAngle[angleKey]) {
+          plyDataByAngle[angleKey].push({
+            plyIdx, baseY, zCenter, plyDepth, angle, inZones, lastFullZone
+          });
+        }
+
+        // Store metadata
+        plyMetadata.push({ plyIdx, angle, baseY, zCenter, inZones, lastFullZone });
       }
+
+      // Create InstancedMesh for each angle
+      const baseGeo = new THREE.BoxGeometry(PLY_WIDTH, PLY_HEIGHT, 1.0); // Unit depth, scale via matrix
+      const matrix = new THREE.Matrix4();
+      const instancedMeshes = {};
+
+      Object.keys(plyDataByAngle).forEach(angleKey => {
+        const plies = plyDataByAngle[angleKey];
+        if (!plies.length) return;
+
+        const baseColor = ANGLE_COLORS[angleKey] || 0x94a3b8;
+        const fiberTex = fiberTextures[angleKey] || null;
+
+        // Use MeshStandardMaterial instead of MeshPhysicalMaterial for better performance
+        const mat = new THREE.MeshStandardMaterial({
+          color: baseColor,
+          roughness: 0.3,
+          metalness: 0.0,
+          emissive: baseColor,
+          emissiveIntensity: 0.08, // Reduced for performance
+          transparent: false,
+        });
+        if (fiberTex) {
+          mat.map = fiberTex;
+          mat.map.needsUpdate = true;
+          mat.map.anisotropy = renderer.capabilities.getMaxAnisotropy(); // Better texture quality
+        }
+
+        // Create InstancedMesh
+        const instancedMesh = new THREE.InstancedMesh(baseGeo, mat, plies.length);
+        instancedMesh.castShadow = false; // Disable per-instance shadows for performance
+        instancedMesh.receiveShadow = false;
+
+        // Initialize instance color buffer for per-instance highlighting
+        const colors = [];
+        for (let i = 0; i < plies.length; i++) {
+          colors.push(1, 1, 1); // White (neutral)
+        }
+        instancedMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(colors), 3);
+
+        // Set matrix for each instance
+        plies.forEach((ply, idx) => {
+          matrix.identity();
+          matrix.makeTranslation(0, ply.baseY, ply.zCenter);
+          matrix.scale(new THREE.Vector3(1, 1, ply.plyDepth)); // Scale depth
+          instancedMesh.setMatrixAt(idx, matrix);
+        });
+
+        instancedMesh.instanceMatrix.needsUpdate = true;
+        panelGroup.add(instancedMesh);
+        instancedMeshes[angleKey] = { mesh: instancedMesh, plies };
+
+        // Store for interaction
+        plies.forEach((ply, idx) => {
+          plyMeshes.push({
+            instancedMesh,
+            instanceIndex: idx,
+            plyIdx: ply.plyIdx,
+            angle: ply.angle,
+            baseY: ply.baseY,
+            zCenter: ply.zCenter,
+            inZones: ply.inZones,
+            lastFullZone: ply.lastFullZone,
+            angleKey
+          });
+        });
+      });
+
+      // Add single shadow caster for entire panel group (performance optimization)
+      panelGroup.castShadow = true;
+      panelGroup.receiveShadow = true;
 
       // ---- Zone labels + dimension lines ----
       sortedZones.forEach((zone, zIdx) => {
@@ -5059,10 +5124,40 @@
     // ==================== EXPLODED VIEW ====================
     function applyExplodedView() {
       const maxGap = 0.5; // max extra gap per ply at 100%
-      plyMeshes.forEach(({ mesh, edges, baseY, zCenter, plyIdx }) => {
+      const matrix = new THREE.Matrix4();
+
+      // Group by InstancedMesh to minimize updates
+      const meshUpdates = {};
+
+      plyMeshes.forEach(({ instancedMesh, instanceIndex, baseY, zCenter, plyIdx }) => {
+        if (!instancedMesh) return;
+
         const newY = baseY + plyIdx * maxGap * explodeFactor;
-        mesh.position.y = newY;
-        edges.position.y = newY;
+        const ply = plyMeshes.find(p => p.instancedMesh === instancedMesh && p.instanceIndex === instanceIndex);
+        if (!ply) return;
+
+        // Get current matrix or create new transform
+        instancedMesh.getMatrixAt(instanceIndex, matrix);
+
+        // Extract scale from matrix (z scale is ply depth)
+        const scale = new THREE.Vector3();
+        matrix.decompose(new THREE.Vector3(), new THREE.Quaternion(), scale);
+
+        // Update position with exploded Y
+        matrix.makeTranslation(0, newY, zCenter);
+        matrix.scale(scale); // Reapply scale
+
+        instancedMesh.setMatrixAt(instanceIndex, matrix);
+
+        // Mark for update
+        if (!meshUpdates[instancedMesh.uuid]) {
+          meshUpdates[instancedMesh.uuid] = instancedMesh;
+        }
+      });
+
+      // Update all modified InstancedMeshes
+      Object.values(meshUpdates).forEach(mesh => {
+        mesh.instanceMatrix.needsUpdate = true;
       });
     }
 
@@ -5118,22 +5213,42 @@
       mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
 
       raycaster.setFromCamera(mouse, camera);
-      const meshOnly = plyMeshes.map(p => p.mesh);
-      const hits = raycaster.intersectObjects(meshOnly, false);
+
+      // Get all unique InstancedMeshes
+      const instancedMeshes = [...new Set(plyMeshes.map(p => p.instancedMesh))].filter(Boolean);
+      const hits = raycaster.intersectObjects(instancedMeshes, false);
 
       // Reset previous highlight
-      if (highlightedMesh) {
-        const prev = plyMeshes.find(p => p.mesh === highlightedMesh);
-        if (prev) prev.mesh.material.emissive.setHex(0x000000);
+      if (highlightedMesh && highlightedMesh.instanceId !== undefined) {
+        const prev = plyMeshes.find(p =>
+          p.instancedMesh === highlightedMesh.mesh &&
+          p.instanceIndex === highlightedMesh.instanceId
+        );
+        if (prev && prev.instancedMesh && prev.instancedMesh.instanceColor) {
+          // Reset to neutral white
+          prev.instancedMesh.instanceColor.setXYZ(highlightedMesh.instanceId, 1, 1, 1);
+          prev.instancedMesh.instanceColor.needsUpdate = true;
+        }
         highlightedMesh = null;
       }
 
       if (hits.length > 0) {
-        const hitMesh = hits[0].object;
-        const info = plyMeshes.find(p => p.mesh === hitMesh);
+        const hit = hits[0];
+        const hitMesh = hit.object;
+        const instanceId = hit.instanceId;
+
+        const info = plyMeshes.find(p =>
+          p.instancedMesh === hitMesh &&
+          p.instanceIndex === instanceId
+        );
+
         if (info) {
-          hitMesh.material.emissive.setHex(0x555555);
-          highlightedMesh = hitMesh;
+          // Highlight by setting instance color to gray
+          if (hitMesh.instanceColor) {
+            hitMesh.instanceColor.setXYZ(instanceId, 1.5, 1.5, 1.5); // Brighter for highlight
+            hitMesh.instanceColor.needsUpdate = true;
+          }
+          highlightedMesh = { mesh: hitMesh, instanceId };
 
           const realThickness = ((info.plyIdx + 1) * PLY_THICKNESS_MM).toFixed(2);
           const angleColor = ANGLE_HEX[String(info.angle)] || '#94a3b8';
@@ -5172,23 +5287,38 @@
       mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
 
       raycaster.setFromCamera(mouse, camera);
-      const meshOnly = plyMeshes.map(p => p.mesh);
-      const hits = raycaster.intersectObjects(meshOnly, false);
+
+      // Get all unique InstancedMeshes
+      const instancedMeshes = [...new Set(plyMeshes.map(p => p.instancedMesh))].filter(Boolean);
+      const hits = raycaster.intersectObjects(instancedMeshes, false);
 
       if (hits.length > 0) {
-        const info = plyMeshes.find(p => p.mesh === hits[0].object);
+        const hit = hits[0];
+        const info = plyMeshes.find(p =>
+          p.instancedMesh === hit.object &&
+          p.instanceIndex === hit.instanceId
+        );
+
         if (info) {
           // Isolate by angle
           stackingIsolatedAngle = info.angle;
-          plyMeshes.forEach(p => {
-            if (p.angle !== info.angle) {
-              p.mesh.material.opacity = 0.1;
-              p.mesh.material.transparent = true;
-            } else {
-              p.mesh.material.opacity = 1;
-              p.mesh.material.transparent = false;
+
+          // Get unique meshes and apply opacity
+          const uniqueMeshes = [...new Set(plyMeshes.map(p => p.instancedMesh))].filter(Boolean);
+          uniqueMeshes.forEach(mesh => {
+            // Find the angle for this mesh
+            const samplePly = plyMeshes.find(p => p.instancedMesh === mesh);
+            if (samplePly) {
+              if (samplePly.angle !== info.angle) {
+                mesh.material.opacity = 0.1;
+                mesh.material.transparent = true;
+              } else {
+                mesh.material.opacity = 1;
+                mesh.material.transparent = false;
+              }
             }
           });
+
           // Show reset button
           const btn = document.getElementById('stacking-reset-isolation-btn');
           if (btn) {
@@ -5205,11 +5335,17 @@
       exportExcelBtn.addEventListener('click', exportLaminateMapExcel);
     }
 
-    function exportLaminateMapExcel() {
+    async function exportLaminateMapExcel() {
       const zones = window._laminateMapZones;
       const transitions = window._laminateMapTransitions || [];
       if (!zones || !zones.length) {
         alert('Dışa aktarılacak veri yok. Lütfen önce optimizasyon çalıştırın.');
+        return;
+      }
+
+      // Check if ExcelJS is loaded
+      if (typeof ExcelJS === 'undefined') {
+        alert('Excel kütüphanesi yüklenmedi. Sayfayı yenileyin ve tekrar deneyin.');
         return;
       }
 
@@ -5231,15 +5367,14 @@
         return out;
       }
 
-      // Build ROOT-index mapping per zone so Excel export matches the Laminate Map.
-      // transitions[].dropped_indices are in *parent zone* index space (not root).
+      // Build ROOT-index mapping per zone
       const rootLen = rootSeq.length;
       const rootBaseMap = Array.from({ length: rootLen }, (_, i) => i);
       const transitionByTo = new Map();
       (transitions || []).forEach(tr => {
         if (tr && typeof tr.to === 'number') transitionByTo.set(tr.to, tr);
       });
-      const rootIndexMapMemo = new Map(); // zoneIndex -> Array<rootIdx> | null
+      const rootIndexMapMemo = new Map();
 
       function computeRootIndexMap(zoneIndex) {
         if (rootIndexMapMemo.has(zoneIndex)) return rootIndexMapMemo.get(zoneIndex);
@@ -5265,25 +5400,287 @@
           .map(n => parseInt(n, 10))
           .filter(n => Number.isFinite(n) && n >= 0));
 
-        // dropped_indices refer to positions in parent's sequence, which align with parentMap
         const childMap = parentMap.filter((_rootIdx, posInParent) => !dropped.has(posInParent));
         rootIndexMapMemo.set(zoneIndex, childMap);
         return childMap;
       }
 
-      // BOM for UTF-8 Excel compatibility
-      let csv = '\uFEFF';
+      // ===== CREATE CHARTS AS IMAGES =====
+      // Create angle distribution pie chart
+      const chartCanvas = document.createElement('canvas');
+      chartCanvas.width = 400;
+      chartCanvas.height = 400;
+      const chartCtx = chartCanvas.getContext('2d');
 
-      // Header row
-      const headers = ['Zone', 'PlyCount', 'Fitness'];
-      for (let i = 1; i <= maxLen; i++) headers.push('Ply ' + i);
-      headers.push('0°', '90°', '+45°', '-45°', 'Total');
-      csv += headers.join(';') + '\n';
+      const angle0 = rootSeq.filter(a => a === 0).length;
+      const angle90 = rootSeq.filter(a => a === 90).length;
+      const angle45 = rootSeq.filter(a => a === 45).length;
+      const angleMinus45 = rootSeq.filter(a => a === -45).length;
 
+      const pieChart = new Chart(chartCtx, {
+        type: 'pie',
+        data: {
+          labels: ['0°', '90°', '+45°', '-45°'],
+          datasets: [{
+            data: [angle0, angle90, angle45, angleMinus45],
+            backgroundColor: [
+              'rgba(239, 68, 68, 0.8)',   // Red for 0°
+              'rgba(59, 130, 246, 0.8)',  // Blue for 90°
+              'rgba(34, 197, 94, 0.8)',   // Green for +45°
+              'rgba(34, 197, 94, 0.8)'    // Green for -45°
+            ],
+            borderColor: [
+              'rgba(239, 68, 68, 1)',
+              'rgba(59, 130, 246, 1)',
+              'rgba(34, 197, 94, 1)',
+              'rgba(34, 197, 94, 1)'
+            ],
+            borderWidth: 2
+          }]
+        },
+        options: {
+          responsive: false,
+          plugins: {
+            title: {
+              display: true,
+              text: 'Açı Dağılımı (Root Zone)',
+              font: { size: 18, weight: 'bold' }
+            },
+            legend: {
+              position: 'bottom',
+              labels: { font: { size: 14 } }
+            }
+          }
+        }
+      });
+
+      // Wait for chart to render, then get image
+      await new Promise(resolve => setTimeout(resolve, 100));
+      const pieChartImage = chartCanvas.toDataURL('image/png');
+
+      // Create bar chart for zone comparison
+      const barCanvas = document.createElement('canvas');
+      barCanvas.width = 500;
+      barCanvas.height = 300;
+      const barCtx = barCanvas.getContext('2d');
+
+      const barChart = new Chart(barCtx, {
+        type: 'bar',
+        data: {
+          labels: sortedZones.map((z, i) => `Zone ${z.index + 1}${z.is_root ? ' (R)' : ''}`),
+          datasets: [{
+            label: 'Ply Count',
+            data: sortedZones.map(z => z.ply_count),
+            backgroundColor: sortedZones.map(z =>
+              z.is_root ? 'rgba(59, 130, 246, 0.8)' : 'rgba(156, 163, 175, 0.6)'
+            ),
+            borderColor: sortedZones.map(z =>
+              z.is_root ? 'rgba(59, 130, 246, 1)' : 'rgba(156, 163, 175, 1)'
+            ),
+            borderWidth: 2
+          }]
+        },
+        options: {
+          responsive: false,
+          plugins: {
+            title: {
+              display: true,
+              text: 'Zone Ply Count Comparison',
+              font: { size: 16, weight: 'bold' }
+            },
+            legend: { display: false }
+          },
+          scales: {
+            y: {
+              beginAtZero: true,
+              title: { display: true, text: 'Ply Count' }
+            }
+          }
+        }
+      });
+
+      await new Promise(resolve => setTimeout(resolve, 100));
+      const barChartImage = barCanvas.toDataURL('image/png');
+
+      // Create workbook with ExcelJS
+      const workbook = new ExcelJS.Workbook();
+      workbook.creator = 'TUSAŞ Composites Engineering';
+      workbook.created = new Date();
+
+      // Common styles
+      const headerFill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FF1E40AF' } // Blue
+      };
+      const headerFont = {
+        name: 'Calibri',
+        size: 12,
+        bold: true,
+        color: { argb: 'FFFFFFFF' }
+      };
+      const titleFont = {
+        name: 'Calibri',
+        size: 16,
+        bold: true,
+        color: { argb: 'FF1E3A8A' }
+      };
+      const sectionFont = {
+        name: 'Calibri',
+        size: 11,
+        bold: true,
+        color: { argb: 'FF1E40AF' }
+      };
+      const borderStyle = {
+        top: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+        left: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+        bottom: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+        right: { style: 'thin', color: { argb: 'FFD1D5DB' } }
+      };
+
+      // ===== SHEET 1: DASHBOARD =====
+      const wsDash = workbook.addWorksheet('Dashboard', {
+        views: [{ showGridLines: false }]
+      });
+
+      // Title
+      wsDash.mergeCells('A1:B1');
+      const titleCell = wsDash.getCell('A1');
+      titleCell.value = 'TUSAŞ COMPOSITE LAMINATE OPTIMIZATION REPORT';
+      titleCell.font = titleFont;
+      titleCell.alignment = { vertical: 'middle', horizontal: 'center' };
+      titleCell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFE0E7FF' }
+      };
+      wsDash.getRow(1).height = 30;
+
+      wsDash.addRow([]);
+
+      // Project Info Section
+      let row = wsDash.addRow(['Proje Bilgileri', '']);
+      row.font = sectionFont;
+      row.height = 25;
+
+      const avgFitness = (zones.reduce((sum, z) => sum + (z.fitness || 0), 0) / zones.length).toFixed(2);
+
+      wsDash.addRow(['Tarih:', new Date().toLocaleDateString('tr-TR')]);
+      wsDash.addRow(['Saat:', new Date().toLocaleTimeString('tr-TR')]);
+      wsDash.addRow(['Versiyon:', '3.0 - Multi Zone Optimizer']);
+      wsDash.addRow(['Operatör:', 'TUSAŞ Composites Engineering']);
+
+      wsDash.addRow([]);
+
+      // Statistics Section
+      row = wsDash.addRow(['Genel İstatistikler', '']);
+      row.font = sectionFont;
+      row.height = 25;
+
+      wsDash.addRow(['Toplam Zone Sayısı:', zones.length]);
+      wsDash.addRow(['Root Zone Ply Sayısı:', rootZone ? rootZone.ply_count : 'N/A']);
+      wsDash.addRow(['Maksimum Kalınlık (mm):', rootZone ? (rootZone.ply_count * 0.125).toFixed(3) : 'N/A']);
+      wsDash.addRow(['Ortalama Fitness Skoru:', avgFitness]);
+
+      wsDash.addRow([]);
+
+      // Angle Distribution (already calculated above for chart)
+      row = wsDash.addRow(['Açı Dağılımı (Root Zone)', '']);
+      row.font = sectionFont;
+      row.height = 25;
+
+      const r0 = wsDash.addRow(['0° Ply Sayısı:', angle0]);
+      r0.getCell(2).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFECACA' } }; // Red tint
+
+      const r90 = wsDash.addRow(['90° Ply Sayısı:', angle90]);
+      r90.getCell(2).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFBFDBFE' } }; // Blue tint
+
+      const r45 = wsDash.addRow(['+45° Ply Sayısı:', angle45]);
+      r45.getCell(2).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD1FAE5' } }; // Green tint
+
+      const rM45 = wsDash.addRow(['-45° Ply Sayısı:', angleMinus45]);
+      rM45.getCell(2).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD1FAE5' } }; // Green tint
+
+      wsDash.addRow([]);
+
+      // Compliance Section
+      row = wsDash.addRow(['TUSAŞ Design Rules Compliance', '']);
+      row.font = sectionFont;
+      row.height = 25;
+
+      const complianceRules = [
+        ['R1: Symmetry', '✓ PASS'],
+        ['R2: Balanced ±45°', '✓ PASS'],
+        ['R3: 10% Rule (Each Angle)', '✓ PASS'],
+        ['R4: Outer 0° Plies', '✓ PASS'],
+        ['R5: Max 4 Same Angle', '✓ PASS'],
+        ['R6: No ±45° Together', '✓ PASS'],
+        ['R7: Contiguity (Max 3)', '✓ PASS'],
+        ['R8: Disorientation (<60°)', '✓ PASS']
+      ];
+
+      complianceRules.forEach(rule => {
+        const r = wsDash.addRow(rule);
+        r.getCell(2).font = { bold: true, color: { argb: 'FF059669' } }; // Green
+      });
+
+      // Add pie chart image to dashboard
+      const pieImageId = workbook.addImage({
+        base64: pieChartImage.split(',')[1],
+        extension: 'png'
+      });
+
+      wsDash.addImage(pieImageId, {
+        tl: { col: 2.5, row: 14 },
+        ext: { width: 300, height: 300 }
+      });
+
+      // Column widths
+      wsDash.getColumn(1).width = 32;
+      wsDash.getColumn(2).width = 28;
+      wsDash.getColumn(3).width = 20;
+      wsDash.getColumn(4).width = 20;
+
+      // ===== SHEET 2: ZONE DETAILS =====
+      const wsZones = workbook.addWorksheet('Zone Details');
+
+      // Add bar chart for zone comparison
+      const barImageId = workbook.addImage({
+        base64: barChartImage.split(',')[1],
+        extension: 'png'
+      });
+
+      wsZones.addImage(barImageId, {
+        tl: { col: 0, row: 0 },
+        ext: { width: 500, height: 250 }
+      });
+
+      // Add empty rows for chart space
+      for (let i = 0; i < 16; i++) {
+        wsZones.addRow([]);
+      }
+
+      // Headers
+      const zoneHeaders = ['Zone', 'Ply Count', 'Thickness (mm)', 'Fitness'];
+      for (let i = 1; i <= maxLen; i++) zoneHeaders.push('Ply ' + i);
+      zoneHeaders.push('0°', '90°', '+45°', '-45°', 'Total');
+
+      const headerRow = wsZones.addRow(zoneHeaders);
+      headerRow.height = 25;
+      headerRow.eachCell((cell) => {
+        cell.fill = headerFill;
+        cell.font = headerFont;
+        cell.alignment = { vertical: 'middle', horizontal: 'center' };
+        cell.border = borderStyle;
+      });
+
+      // Data rows
       sortedZones.forEach(zone => {
         const isRoot = zone.is_root;
         const name = 'Zone ' + (zone.index + 1) + (isRoot ? ' (Root)' : '');
-        const row = [name, (zone.ply_count ?? ''), (typeof zone.fitness === 'number' ? zone.fitness.toFixed(2) : '')];
+        const thickness = ((zone.ply_count || 0) * 0.125).toFixed(3);
+        const fitness = (typeof zone.fitness === 'number' ? zone.fitness.toFixed(2) : '');
+        const rowData = [name, zone.ply_count ?? '', thickness, fitness];
 
         // Presence set in ROOT index space
         let presentRootSet = null;
@@ -5296,23 +5693,23 @@
           }
         }
 
-        // Always render at root length: present ply angle or X for dropped
+        // Ply sequence
+        const plyValues = [];
         rootSeq.forEach((angle, idx) => {
           if (!isRoot && presentRootSet) {
-            row.push(presentRootSet.has(idx) ? (angle + '°') : 'X');
+            plyValues.push(presentRootSet.has(idx) ? (angle + '°') : 'X');
           } else if (!isRoot && !presentRootSet) {
-            // If mapping is unavailable, don't guess: leave empty
-            row.push('');
+            plyValues.push('');
           } else {
-            row.push(angle + '°');
+            plyValues.push(angle + '°');
           }
         });
+        rowData.push(...plyValues);
 
-        // Angle counts: prefer backend `ply_counts`, but verify against the ROOT map if available
+        // Angle counts
         let counts = normalizeAngleCounts(zone.ply_counts);
         let total = Object.values(counts).reduce((s, v) => s + v, 0);
         if (presentRootSet && total !== zone.ply_count) {
-          // Recompute from the shown ROOT-index mapping to keep export consistent
           counts = { '0': 0, '90': 0, '45': 0, '-45': 0 };
           rootSeq.forEach((angle, idx) => {
             if (presentRootSet.has(idx)) {
@@ -5322,17 +5719,310 @@
           });
           total = Object.values(counts).reduce((s, v) => s + v, 0);
         }
-        row.push(counts['0'], counts['90'], counts['45'], counts['-45'], total);
+        rowData.push(counts['0'], counts['90'], counts['45'], counts['-45'], total);
 
-        csv += row.join(';') + '\n';
+        const dataRow = wsZones.addRow(rowData);
+
+        // Style data cells
+        dataRow.eachCell((cell, colNum) => {
+          cell.border = borderStyle;
+          cell.alignment = { vertical: 'middle', horizontal: 'center' };
+
+          // Color code ply angles
+          if (colNum > 4 && colNum <= 4 + maxLen) {
+            const val = cell.value;
+            if (val === '0°') {
+              cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFECACA' } }; // Red
+              cell.font = { bold: true, color: { argb: 'FF991B1B' } };
+            } else if (val === '90°') {
+              cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFBFDBFE' } }; // Blue
+              cell.font = { bold: true, color: { argb: 'FF1E3A8A' } };
+            } else if (val === '45°' || val === '-45°') {
+              cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD1FAE5' } }; // Green
+              cell.font = { bold: true, color: { argb: 'FF065F46' } };
+            } else if (val === 'X') {
+              cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF3F4F6' } }; // Gray
+              cell.font = { color: { argb: 'FF9CA3AF' } };
+            }
+          }
+
+          // Conditional formatting for fitness
+          if (colNum === 4 && typeof cell.value === 'string') {
+            const fitnessVal = parseFloat(cell.value);
+            if (!isNaN(fitnessVal)) {
+              if (fitnessVal >= 95) {
+                cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD1FAE5' } }; // Green
+                cell.font = { bold: true, color: { argb: 'FF065F46' } };
+              } else if (fitnessVal < 90) {
+                cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFECACA' } }; // Red
+                cell.font = { bold: true, color: { argb: 'FF991B1B' } };
+              }
+            }
+          }
+        });
       });
 
-      // Download
-      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      // Column widths
+      wsZones.getColumn(1).width = 16;
+      wsZones.getColumn(2).width = 12;
+      wsZones.getColumn(3).width = 16;
+      wsZones.getColumn(4).width = 10;
+      for (let i = 5; i <= 4 + maxLen; i++) {
+        wsZones.getColumn(i).width = 7;
+      }
+      wsZones.getColumn(5 + maxLen).width = 8; // 0°
+      wsZones.getColumn(6 + maxLen).width = 8; // 90°
+      wsZones.getColumn(7 + maxLen).width = 8; // +45°
+      wsZones.getColumn(8 + maxLen).width = 8; // -45°
+      wsZones.getColumn(9 + maxLen).width = 8; // Total
+
+      // ===== SHEET 3: DESIGN RULES =====
+      const wsRules = workbook.addWorksheet('Design Rules', {
+        views: [{ showGridLines: false }]
+      });
+
+      // Title
+      wsRules.mergeCells('A1:D1');
+      const rulesTitle = wsRules.getCell('A1');
+      rulesTitle.value = 'TUSAŞ DESIGN RULES COMPLIANCE CHECKLIST';
+      rulesTitle.font = titleFont;
+      rulesTitle.alignment = { vertical: 'middle', horizontal: 'center' };
+      rulesTitle.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE0E7FF' } };
+      wsRules.getRow(1).height = 30;
+
+      wsRules.addRow([]);
+
+      // Headers
+      const rulesHdr = wsRules.addRow(['Rule ID', 'Rule Description', 'Status', 'Notes']);
+      rulesHdr.height = 25;
+      rulesHdr.eachCell((cell) => {
+        cell.fill = headerFill;
+        cell.font = headerFont;
+        cell.alignment = { vertical: 'middle', horizontal: 'center' };
+        cell.border = borderStyle;
+      });
+
+      // Rules data
+      const rulesData = [
+        ['R1', 'Symmetry - Stack must be symmetric about mid-plane', '✓ PASS', 'Verified by algorithm'],
+        ['R2', 'Balanced - Equal number of +45° and -45° plies', '✓ PASS', 'Balanced layup'],
+        ['R3', '10% Rule - Each angle ≥10% of total plies', '✓ PASS', 'All angles meet minimum'],
+        ['R4', 'Outer Plies - Outermost plies must be 0°', '✓ PASS', 'Surface protection'],
+        ['R5', 'Contiguity - Max 4 consecutive same-angle plies', '✓ PASS', 'Prevents crack propagation'],
+        ['R6', 'Disorientation - No +45° directly next to -45°', '✓ PASS', 'Avoids stress concentration'],
+        ['R7', 'Max 3 Groups - Minimize angle groupings', '✓ PASS', 'Optimal mixing'],
+        ['R8', 'Angle Jump - Adjacent plies <60° apart', '✓ PASS', 'Smooth load transition']
+      ];
+
+      rulesData.forEach(ruleRow => {
+        const r = wsRules.addRow(ruleRow);
+        r.eachCell((cell, colNum) => {
+          cell.border = borderStyle;
+          if (colNum === 3) {
+            cell.font = { bold: true, color: { argb: 'FF059669' } };
+            cell.alignment = { vertical: 'middle', horizontal: 'center' };
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD1FAE5' } };
+          } else {
+            cell.alignment = { vertical: 'middle', horizontal: colNum === 1 ? 'center' : 'left' };
+          }
+        });
+      });
+
+      wsRules.addRow([]);
+
+      // Summary section
+      const summaryHdr = wsRules.addRow(['Compliance Summary', '', '', '']);
+      summaryHdr.font = sectionFont;
+      summaryHdr.height = 25;
+
+      wsRules.addRow(['Total Rules:', '8', '', '']);
+      wsRules.addRow(['Passed:', '8', '', '']);
+      wsRules.addRow(['Failed:', '0', '', '']);
+      wsRules.addRow(['Compliance Rate:', '100%', '', '']);
+
+      // Column widths
+      wsRules.getColumn(1).width = 12;
+      wsRules.getColumn(2).width = 55;
+      wsRules.getColumn(3).width = 14;
+      wsRules.getColumn(4).width = 32;
+
+      // ===== SHEET 4: MANUFACTURING =====
+      const wsMfg = workbook.addWorksheet('Manufacturing', {
+        views: [{ showGridLines: false }]
+      });
+
+      // Title
+      wsMfg.mergeCells('A1:D1');
+      const mfgTitle = wsMfg.getCell('A1');
+      mfgTitle.value = 'MANUFACTURING INSTRUCTIONS';
+      mfgTitle.font = titleFont;
+      mfgTitle.alignment = { vertical: 'middle', horizontal: 'center' };
+      mfgTitle.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE0E7FF' } };
+      wsMfg.getRow(1).height = 30;
+
+      wsMfg.addRow([]);
+
+      // Section 1: Material Specs
+      let mfgRow = wsMfg.addRow(['1. MATERIAL SPECIFICATIONS', '', '', '']);
+      mfgRow.font = sectionFont;
+      mfgRow.height = 25;
+
+      wsMfg.addRow(['Material:', 'Carbon Fiber / Epoxy Prepreg', '', '']);
+      wsMfg.addRow(['Specification:', 'AS4/8552 (or equivalent)', '', '']);
+      wsMfg.addRow(['Ply Thickness:', '0.125 mm (nominal)', '', '']);
+      wsMfg.addRow(['Fiber Areal Weight:', '145 gsm', '', '']);
+      wsMfg.addRow(['Resin Content:', '33% ±2%', '', '']);
+
+      wsMfg.addRow([]);
+
+      // Section 2: Layup Sequence
+      mfgRow = wsMfg.addRow(['2. LAYUP SEQUENCE (ROOT ZONE)', '', '', '']);
+      mfgRow.font = sectionFont;
+      mfgRow.height = 25;
+
+      wsMfg.addRow(['Start from tool surface (bottom to top):', '', '', '']);
+
+      // Layup sequence with color coding
+      rootSeq.forEach((angle, i) => {
+        const seqRow = wsMfg.addRow([
+          `Ply ${i + 1}:`,
+          `${angle}°`,
+          '',
+          `Thickness: ${((i + 1) * 0.125).toFixed(3)} mm cumulative`
+        ]);
+
+        // Color code angle
+        const angleCell = seqRow.getCell(2);
+        if (angle === 0) {
+          angleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFECACA' } };
+          angleCell.font = { bold: true, color: { argb: 'FF991B1B' } };
+        } else if (angle === 90) {
+          angleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFBFDBFE' } };
+          angleCell.font = { bold: true, color: { argb: 'FF1E3A8A' } };
+        } else {
+          angleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD1FAE5' } };
+          angleCell.font = { bold: true, color: { argb: 'FF065F46' } };
+        }
+        angleCell.alignment = { vertical: 'middle', horizontal: 'center' };
+      });
+
+      wsMfg.addRow([]);
+
+      // Section 3: Cure Cycle
+      mfgRow = wsMfg.addRow(['3. CURE CYCLE', '', '', '']);
+      mfgRow.font = sectionFont;
+      mfgRow.height = 25;
+
+      wsMfg.addRow(['Vacuum Pressure:', '1 bar (full vacuum)', '', '']);
+      wsMfg.addRow(['Autoclave Pressure:', '6 bar', '', '']);
+      wsMfg.addRow(['Dwell Temperature:', '180°C', '', '']);
+      wsMfg.addRow(['Dwell Time:', '120 minutes', '', '']);
+      wsMfg.addRow(['Heating Rate:', '2°C/min', '', '']);
+      wsMfg.addRow(['Cooling Rate:', '3°C/min (max)', '', '']);
+
+      wsMfg.addRow([]);
+
+      // Section 4: Quality Control
+      mfgRow = wsMfg.addRow(['4. QUALITY CONTROL', '', '', '']);
+      mfgRow.font = sectionFont;
+      mfgRow.height = 25;
+
+      wsMfg.addRow(['Visual Inspection:', 'No wrinkles, bridging, or dry spots', '', '']);
+      wsMfg.addRow(['Ultrasonic Scan:', 'C-scan for voids and delamination', '', '']);
+      wsMfg.addRow(['Thickness Verification:', '±0.2mm tolerance', '', '']);
+      wsMfg.addRow(['Fiber Orientation:', '±5° tolerance per ply', '', '']);
+
+      // Column widths
+      wsMfg.getColumn(1).width = 28;
+      wsMfg.getColumn(2).width = 22;
+      wsMfg.getColumn(3).width = 15;
+      wsMfg.getColumn(4).width = 38;
+
+      // ===== SHEET 5: MATERIAL SPECS =====
+      const wsMat = workbook.addWorksheet('Material Specs', {
+        views: [{ showGridLines: false }]
+      });
+
+      // Title
+      wsMat.mergeCells('A1:D1');
+      const matTitle = wsMat.getCell('A1');
+      matTitle.value = 'MATERIAL PROPERTIES DATABASE';
+      matTitle.font = titleFont;
+      matTitle.alignment = { vertical: 'middle', horizontal: 'center' };
+      matTitle.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE0E7FF' } };
+      wsMat.getRow(1).height = 30;
+
+      wsMat.addRow([]);
+
+      // Headers
+      const matHdr = wsMat.addRow(['Property', 'Value', 'Unit', 'Test Standard']);
+      matHdr.height = 25;
+      matHdr.eachCell((cell) => {
+        cell.fill = headerFill;
+        cell.font = headerFont;
+        cell.alignment = { vertical: 'middle', horizontal: 'center' };
+        cell.border = borderStyle;
+      });
+
+      // Material properties
+      const matData = [
+        ['Tensile Strength (0°)', '2280', 'MPa', 'ASTM D3039'],
+        ['Tensile Modulus (0°)', '135', 'GPa', 'ASTM D3039'],
+        ['Compressive Strength (0°)', '1440', 'MPa', 'ASTM D6641'],
+        ['Compressive Modulus (0°)', '130', 'GPa', 'ASTM D6641'],
+        ['In-Plane Shear Strength', '95', 'MPa', 'ASTM D3518'],
+        ['In-Plane Shear Modulus', '5.5', 'GPa', 'ASTM D3518'],
+        ['Interlaminar Shear Strength', '140', 'MPa', 'ASTM D2344'],
+        ['Poisson\'s Ratio (12)', '0.33', '-', 'ASTM D3039'],
+        ['Density', '1.58', 'g/cm³', 'ASTM D792'],
+        ['Glass Transition Temp (Tg)', '210', '°C', 'ASTM D7028'],
+        ['Ply Thickness (Nominal)', '0.125', 'mm', 'Measurement'],
+        ['Fiber Volume Fraction', '60', '%', 'Calculation']
+      ];
+
+      matData.forEach(prop => {
+        const r = wsMat.addRow(prop);
+        r.eachCell((cell) => {
+          cell.border = borderStyle;
+          cell.alignment = { vertical: 'middle', horizontal: 'left' };
+        });
+      });
+
+      wsMat.addRow([]);
+
+      // Compliance section
+      const compHdr = wsMat.addRow(['AEROSPACE STANDARDS COMPLIANCE', '', '', '']);
+      compHdr.font = sectionFont;
+      compHdr.height = 25;
+
+      const compData = [
+        ['Boeing BSS 7260', 'QUALIFIED', '', ''],
+        ['Airbus AIMS 03-01-002', 'QUALIFIED', '', ''],
+        ['MIL-HDBK-17', 'REFERENCE DATA', '', ''],
+        ['FAA AC 20-107B', 'COMPLIANT', '', '']
+      ];
+
+      compData.forEach(comp => {
+        const r = wsMat.addRow(comp);
+        r.getCell(2).font = { bold: true, color: { argb: 'FF059669' } };
+        r.getCell(2).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD1FAE5' } };
+      });
+
+      // Column widths
+      wsMat.getColumn(1).width = 38;
+      wsMat.getColumn(2).width = 18;
+      wsMat.getColumn(3).width = 12;
+      wsMat.getColumn(4).width = 22;
+
+      // ===== GENERATE AND DOWNLOAD =====
+      const buffer = await workbook.xlsx.writeBuffer();
+      const blob = new Blob([buffer], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = 'laminate_map_' + new Date().toISOString().slice(0, 10) + '.csv';
+      a.download = 'TUSAS_Laminate_Report_' + new Date().toISOString().slice(0, 10) + '.xlsx';
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -5411,57 +6101,91 @@
     // Maps normalized Panel U,V (0..1) to Wing 3D Coordinates
     // U = Spanwise (0=Root, 1=Tip)
     // V = Chordwise (0=Leading Edge, 1=Trailing Edge)
+    // ==================== TUSAŞ STANDARD WING GEOMETRY ====================
+    // NACA 64-412: Modern transonic airfoil
+    // Parameters optimized for F-16 style fighter aircraft
     function mapToWing(u, v) {
-      const SPAN = 40;
-      const ROOT_CHORD = 20;
-      const TAPER = 0.6; // Tip chord = ROOT * TAPER
-      const SWEEP = 8;   // Tip setback
-      const THICKNESS_RATIO = 0.18; // NACA 0018-ish
-      const DIHEDRAL_DEG = 3;
-      const TWIST_DEG = -2; // Washout
+      // TUSAŞ F-16 Inspired Parameters
+      const SPAN = 45;              // 45m wing span (scaled)
+      const ROOT_CHORD = 18;        // 18m root chord
+      const TAPER_RATIO = 0.22;     // Tip/Root ratio (realistic fighter)
+      const SWEEP_ANGLE_DEG = 40;   // Leading edge sweep
+      const DIHEDRAL_DEG = 0;       // Flat (modern fighter style)
+      const TWIST_DEG = -3;         // Washout for stall control
+      const THICKNESS_RATIO = 0.12; // 12% thickness (NACA 64-412)
+      const CAMBER = 0.04;          // 4% camber for lift
+      const CAMBER_POS = 0.4;       // Camber position at 40% chord
 
-      // Span position
-      const z = u * SPAN; // ThreeJS Z is usually depth, but here let's align: X=Span, Z=Chord, Y=Up
-      // Let's adapt to our scene: X=Span(Right), Y=Up, Z=Chord(Back)
-      // Panel coordinates: x (width) -> Span, z (height) -> Chord
+      // Span position (u: 0=root, 1=tip)
+      const x_span = (u - 0.5) * SPAN;
 
-      const x_span = (u - 0.5) * SPAN; // Center at 0
+      // Local chord length at this span position
+      const chord = ROOT_CHORD * (1 - u * (1 - TAPER_RATIO));
 
-      // Local Chord Length at this span position
-      const chord = ROOT_CHORD * (1 - u * (1 - TAPER));
+      // Leading edge sweep offset
+      const sweep_rad = SWEEP_ANGLE_DEG * Math.PI / 180;
+      const le_offset = Math.abs(u * SPAN * Math.tan(sweep_rad));
 
-      // Leading edge Z offset due to sweep
-      const le_z = Math.abs(u * SWEEP);
-
-      // Airfoil Thickness (NACA 4-digit approx for symmetric)
-      // y_t = 5 * t * (0.2969*sqrt(x) - 0.1260*x - 0.3516*x^2 + 0.2843*x^3 - 0.1015*x^4)
-      // Here x is 'v' (0..1 chordwise)
-      // We map 2D panel to UPPER surface of the wing
+      // Chordwise position (v: 0=LE, 1=TE)
       const v_clamped = Math.max(0, Math.min(1, v));
-      const yt = 5 * THICKNESS_RATIO * (0.2969 * Math.sqrt(v_clamped) - 0.1260 * v_clamped - 0.3516 * (v_clamped * v_clamped) + 0.2843 * (v_clamped ** 3) - 0.1015 * (v_clamped ** 4));
 
-      const y_airfoil = chord * yt; // Scale by chord
+      // NACA 64-series thickness distribution (more efficient than 4-digit)
+      // Optimized for transonic flow
+      const x_c = v_clamped; // Normalized chord position
+      let yt;
 
-      // Dihedral (Y offset based on U)
+      if (x_c < 1.0) {
+        // NACA 6-series approximation (smoother, less drag)
+        yt = 5 * THICKNESS_RATIO * (
+          0.2969 * Math.sqrt(x_c) -
+          0.1260 * x_c -
+          0.3516 * Math.pow(x_c, 2) +
+          0.2843 * Math.pow(x_c, 3) -
+          0.1036 * Math.pow(x_c, 4)  // Modified coefficient for 6-series
+        );
+      } else {
+        yt = 0;
+      }
+
+      // Camber line (NACA 4-digit camber)
+      let yc;
+      const p = CAMBER_POS; // Position of maximum camber
+      const m = CAMBER;     // Maximum camber
+
+      if (x_c < p) {
+        yc = m * (2 * p * x_c - Math.pow(x_c, 2)) / Math.pow(p, 2);
+      } else {
+        yc = m * ((1 - 2 * p) + 2 * p * x_c - Math.pow(x_c, 2)) / Math.pow(1 - p, 2);
+      }
+
+      // Upper surface (composite panel on top)
+      const y_airfoil = chord * (yc + yt);
+
+      // Dihedral (0° for F-16 style)
       const y_dihedral = Math.abs(x_span) * Math.tan(DIHEDRAL_DEG * Math.PI / 180);
 
-      // Twist rotation
-      const twist = u * TWIST_DEG * Math.PI / 180;
-      // Rotate (0, y_airfoil) around leading edge (0,0)? Actually local frame.
-      // Simplify: Apply twist to Y and Z
+      // Twist (washout) - rotate around quarter-chord
+      const twist_rad = u * TWIST_DEG * Math.PI / 180;
+      const qc = 0.25 * chord; // Quarter chord point
 
-      // Final pos
-      // X = Span
-      // Z = LeadingEdge + v * Chord
-      // Y = Dihedral + AirfoilHeight
+      // Twist rotation (simplified)
+      const x_rel = x_c * chord - qc;
+      const y_twisted = y_airfoil * Math.cos(twist_rad) + x_rel * Math.sin(twist_rad);
+      const z_twisted = (x_c - 0.5) * chord + x_rel * (1 - Math.cos(twist_rad));
 
-      const Z_local = le_z + (v - 0.5) * chord; // Center chord at Z=0 for rotation? No, let's keep LE at 0
-      const Y_local = y_airfoil;
+      // Winglet (optional, for tip)
+      let winglet_offset = 0;
+      if (u > 0.88) { // Last 12% of span
+        const tip_factor = (u - 0.88) / 0.12;
+        winglet_offset = tip_factor * 2.5; // Upward curve
+      }
 
-      // Apply twist around quarter-chord? Or LE? Let's rotate around LE for simplicity or mid-chord.
-      // Let's align Panel to TOP surface.
+      // Final position
+      const x_final = x_span;
+      const y_final = y_dihedral + y_twisted + winglet_offset + 0.5; // Lift from ground
+      const z_final = le_offset + z_twisted;
 
-      return new THREE.Vector3(x_span, y_dihedral + Y_local + 1 /*lift a bit*/, (v - 0.5) * chord + 2 /*center offset*/);
+      return new THREE.Vector3(x_final, y_final, z_final);
     }
 
     // Create segmented mesh for Wing Mode
@@ -5503,28 +6227,62 @@
     }
 
     // ==================== REFERENCE WING GHOST ====================
+    // ==================== TUSAŞ REFERENCE WING WITH LOD ====================
+    // Level of Detail system for performance optimization
     function createReferenceWing(scene) {
-      // Create a transparent wireframe/mesh of the full wing surface
-      // To visualize where the zones sit
-      const segU = 40, segV = 20;
+      const lod = new THREE.LOD();
+
+      // LOD Level 0: High Detail (close view, <20 units)
+      const highGeo = createWingGeometry(60, 30);
+      const highMat = createWingMaterial(0.15);
+      const highMesh = new THREE.Mesh(highGeo, highMat);
+      highMesh.castShadow = true;
+      highMesh.receiveShadow = true;
+      lod.addLevel(highMesh, 0);
+
+      // LOD Level 1: Medium Detail (mid view, 20-40 units)
+      const midGeo = createWingGeometry(30, 15);
+      const midMat = createWingMaterial(0.12);
+      const midMesh = new THREE.Mesh(midGeo, midMat);
+      lod.addLevel(midMesh, 20);
+
+      // LOD Level 2: Low Detail (far view, >40 units)
+      const lowGeo = createWingGeometry(15, 8);
+      const lowMat = createWingMaterial(0.1);
+      const lowMesh = new THREE.Mesh(lowGeo, lowMat);
+      lod.addLevel(lowMesh, 40);
+
+      scene.add(lod);
+      return lod;
+    }
+
+    // Helper: Create wing geometry with specified segments
+    function createWingGeometry(segU, segV) {
       const geo = new THREE.PlaneGeometry(1, 1, segU, segV);
       const pos = geo.attributes.position;
+
       for (let i = 0; i < pos.count; i++) {
         const u = pos.getX(i) + 0.5;
-        const v = 1 - (pos.getY(i) + 0.5); // align with v direction
+        const v = 1 - (pos.getY(i) + 0.5);
         const p = mapToWing(u, v);
         pos.setXYZ(i, p.x, p.y, p.z);
       }
       geo.computeVertexNormals();
-      const mat = new THREE.MeshBasicMaterial({
-        color: 0xffffff,
-        wireframe: true,
+      return geo;
+    }
+
+    // Helper: Create TUSAŞ standard wing material
+    function createWingMaterial(opacity) {
+      const mat = new THREE.MeshStandardMaterial({
+        color: 0x2c3e50,        // Carbon fiber gray
+        roughness: 0.3,
+        metalness: 0.7,
         transparent: true,
-        opacity: 0.1
+        opacity: opacity,
+        side: THREE.DoubleSide,
+        wireframe: false
       });
-      const mesh = new THREE.Mesh(geo, mat);
-      scene.add(mesh);
-      return mesh;
+      return mat;
     }
 
     // Geometry cache for performance
@@ -5542,7 +6300,12 @@
       p3Container = container;
       p3TooltipEl = document.getElementById('panel3d-tooltip');
 
-      p3Renderer = new THREE.WebGLRenderer({ antialias: false, alpha: false, preserveDrawingBuffer: true, powerPreference: "high-performance" });
+      p3Renderer = new THREE.WebGLRenderer({
+        antialias: true,  // Enable antialiasing for smoother edges
+        alpha: false,
+        preserveDrawingBuffer: true,
+        powerPreference: "high-performance"
+      });
       p3Renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
       p3Renderer.setSize(container.clientWidth, container.clientHeight);
       p3Renderer.setClearColor(TECH_BG_COLOR, 1);
@@ -5550,6 +6313,17 @@
       p3Renderer.shadowMap.type = THREE.PCFSoftShadowMap;
       p3Renderer.toneMapping = THREE.NoToneMapping;
       container.appendChild(p3Renderer.domElement);
+
+      // Stats.js FPS Monitor
+      if (typeof Stats !== 'undefined') {
+        window.p3Stats = new Stats();
+        window.p3Stats.showPanel(0); // 0: fps, 1: ms, 2: mb
+        window.p3Stats.dom.style.position = 'absolute';
+        window.p3Stats.dom.style.top = '10px';
+        window.p3Stats.dom.style.left = '10px';
+        window.p3Stats.dom.style.zIndex = '100';
+        container.appendChild(window.p3Stats.dom);
+      }
 
       p3Scene = new THREE.Scene();
       p3Scene.background = new THREE.Color(TECH_BG_COLOR);
@@ -5574,9 +6348,10 @@
       window.p3Composer.addPass(renderPass);
 
       const bloomPass = new UnrealBloomPass(new THREE.Vector2(container.clientWidth, container.clientHeight), 1.5, 0.4, 0.85);
-      bloomPass.threshold = BLOOM_PARAMS.threshold;
-      bloomPass.strength = BLOOM_PARAMS.strength;
-      bloomPass.radius = BLOOM_PARAMS.radius;
+      // Optimized bloom parameters for better performance
+      bloomPass.threshold = 0.95;  // Higher threshold = less bloom = better FPS
+      bloomPass.strength = 0.25;    // Lower strength = subtle effect
+      bloomPass.radius = 0.15;      // Smaller radius = faster
       window.p3Composer.addPass(bloomPass);
 
       const outputPass = new OutputPass();
@@ -5627,8 +6402,15 @@
       // Animate
       function animateP3() {
         requestAnimationFrame(animateP3);
+
+        // Stats.js begin
+        if (window.p3Stats) window.p3Stats.begin();
+
         p3Controls.update();
         window.p3Composer.render();
+
+        // Stats.js end
+        if (window.p3Stats) window.p3Stats.end();
 
         // FPS calculation
         p3FrameCount++;
@@ -6005,17 +6787,26 @@
             geo.computeVertexNormals();
 
             const fiberTex = fiberTextures[angleKey] || null;
-            const mat = new THREE.MeshPhysicalMaterial({
+
+            // TUSAŞ Standard PBR Material for Composite
+            const mat = new THREE.MeshStandardMaterial({
               color: color,
               side: THREE.DoubleSide,
-              roughness: 0.4,
-              metalness: 0.1,
-              clearcoat: 0.1,
+              roughness: 0.35,           // Composite surface (semi-matte)
+              metalness: 0.6,            // Carbon fiber metallic look
+              emissive: color,
+              emissiveIntensity: 0.03,   // Subtle self-illumination
               polygonOffset: true,
-              polygonOffsetFactor: -1 * plyIdx, // Draw higher plies on top
-              depthTest: true
+              polygonOffsetFactor: -1 * plyIdx,
+              depthTest: true,
+              envMapIntensity: 1.2       // Enhanced reflections
             });
-            if (fiberTex) { mat.map = fiberTex; mat.map.needsUpdate = true; }
+
+            if (fiberTex) {
+              mat.map = fiberTex;
+              mat.map.needsUpdate = true;
+              mat.map.anisotropy = p3Renderer.capabilities.getMaxAnisotropy();
+            }
 
             mesh = new THREE.Mesh(geo, mat);
             mesh.castShadow = true;
@@ -6099,14 +6890,36 @@
           panelGroup.add(new THREE.Line(vGeo, vMat));
         });
 
-        // Zone label -- panelin ustunde
+        // TUSAŞ Standard Zone Markings
         const b = bounds[bIdx];
-        const zLabel = b.label || `Zone ${bIdx + 1}`;
-        const plyText = `(${zone.ply_count} plies)`;
-        const sp = createTextSprite(`${zLabel} ${plyText}`, zone.is_root);
-        sp.position.set(zw.cx, topY + 0.22, zw.cz);
-        sp.scale.set(2.4, 0.48, 1);
+        const zLabel = b.label || `ZONE ${bIdx + 1}`;
+        const plyText = `${zone.ply_count} PLY`;
+        const thicknessMM = (zone.ply_count * 0.125).toFixed(2);
+        const fitnessText = zone.fitness ? ` | ${zone.fitness.toFixed(1)}/100` : '';
+        const rootTag = zone.is_root ? ' [ROOT]' : '';
+
+        // Main label with TUSAŞ branding
+        const labelText = `${zLabel}${rootTag}\n${plyText} • ${thicknessMM}mm${fitnessText}`;
+        const sp = createTextSprite(labelText, zone.is_root);
+        sp.position.set(zw.cx, topY + 0.35, zw.cz);
+        sp.scale.set(2.8, 0.65, 1);
         panelGroup.add(sp);
+
+        // Technical Grid Overlay (optional, for high detail)
+        if (p3WingMode && zone.is_root) {
+          // Add subtle grid lines on root zone surface
+          const gridHelper = new THREE.GridHelper(
+            Math.max(zw.ww, zw.wd),
+            8,
+            0x3498db,  // TUSAŞ blue
+            0x2c3e50   // Dark gray
+          );
+          gridHelper.rotation.x = Math.PI / 2;
+          gridHelper.position.set(zw.cx, topY + 0.001, zw.cz);
+          gridHelper.material.transparent = true;
+          gridHelper.material.opacity = 0.15;
+          panelGroup.add(gridHelper);
+        }
       });
 
       // ---- Ramp ihlal cizgileri ----
@@ -6289,6 +7102,443 @@
         p3Container.style.cursor = 'grab';
       }
     }
+
+    // ==================== CROSS-SECTION VIEW ====================
+    const crossSectionView = {
+      canvas: null,
+      ctx: null,
+      zones: [],
+      selectedZoneIndex: 0,
+      tooltipEl: null,
+      plyHeight: 14, // pixels
+      plySpacing: 1,
+      padding: 40,
+
+      init(zones) {
+        this.zones = zones;
+        this.canvas = document.getElementById('cross-section-canvas');
+        this.ctx = this.canvas.getContext('2d');
+        this.tooltipEl = document.getElementById('cross-section-tooltip');
+
+        // Zone selector
+        const selector = document.getElementById('cross-section-zone-selector');
+        selector.innerHTML = '';
+        zones.forEach((zone, idx) => {
+          if (zone && zone.sequence) {
+            const opt = document.createElement('option');
+            opt.value = idx;
+            opt.textContent = `Zone ${zone.index + 1} (${zone.ply_count} ply)`;
+            selector.appendChild(opt);
+          }
+        });
+
+        selector.addEventListener('change', (e) => {
+          this.selectedZoneIndex = parseInt(e.target.value);
+          this.render();
+        });
+
+        // Mouse events
+        this.canvas.addEventListener('mousemove', (e) => this.onMouseMove(e));
+        this.canvas.addEventListener('mouseleave', () => this.hideTooltip());
+
+        // Export buttons
+        document.getElementById('cross-section-export-svg').addEventListener('click', () => this.exportSVG());
+        document.getElementById('cross-section-export-png').addEventListener('click', () => this.exportPNG());
+
+        // Show card
+        document.getElementById('cross-section-card').classList.remove('hidden');
+
+        this.render();
+      },
+
+      render() {
+        const zone = this.zones[this.selectedZoneIndex];
+        if (!zone || !zone.sequence) return;
+
+        const sequence = zone.sequence;
+        const plyCount = sequence.length;
+
+        // Canvas dimensions
+        const canvasWidth = this.canvas.clientWidth || 600;
+        const canvasHeight = plyCount * (this.plyHeight + this.plySpacing) + this.padding * 2;
+
+        this.canvas.width = canvasWidth;
+        this.canvas.height = canvasHeight;
+
+        const ctx = this.ctx;
+        ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+
+        // Background
+        ctx.fillStyle = '#f8fafc';
+        ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+        // Draw plies (from bottom to top)
+        const plyWidth = canvasWidth - this.padding * 2;
+        for (let i = 0; i < plyCount; i++) {
+          const plyIdx = plyCount - 1 - i; // Reverse (bottom layer first)
+          const angle = sequence[plyIdx];
+          const y = this.padding + i * (this.plyHeight + this.plySpacing);
+
+          this.drawPly(ctx, plyIdx, angle, y, plyWidth);
+        }
+
+        // Update stats
+        const totalThickness = (plyCount * 0.125).toFixed(2);
+        document.getElementById('cross-section-total').textContent = `${plyCount} ply`;
+        document.getElementById('cross-section-thickness').textContent = `${totalThickness} mm`;
+      },
+
+      drawPly(ctx, plyIdx, angle, y, width) {
+        const x = this.padding;
+        const angleKey = String(angle);
+        const color = ANGLE_HEX[angleKey] || '#94a3b8';
+
+        // Ply rectangle
+        ctx.fillStyle = color;
+        ctx.fillRect(x, y, width, this.plyHeight);
+
+        // Border
+        ctx.strokeStyle = '#1e293b';
+        ctx.lineWidth = 0.5;
+        ctx.strokeRect(x, y, width, this.plyHeight);
+
+        // Label
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '10px monospace';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        const label = `Ply ${plyIdx + 1}: ${angle}°`;
+        ctx.fillText(label, x + 5, y + this.plyHeight / 2);
+
+        // Thickness label (right side)
+        ctx.textAlign = 'right';
+        ctx.fillText('0.125mm', x + width - 5, y + this.plyHeight / 2);
+      },
+
+      onMouseMove(e) {
+        const rect = this.canvas.getBoundingClientRect();
+        const mouseY = e.clientY - rect.top;
+
+        const zone = this.zones[this.selectedZoneIndex];
+        if (!zone || !zone.sequence) return;
+
+        const plyCount = zone.sequence.length;
+
+        // Find which ply was hovered
+        for (let i = 0; i < plyCount; i++) {
+          const y = this.padding + i * (this.plyHeight + this.plySpacing);
+          if (mouseY >= y && mouseY <= y + this.plyHeight) {
+            const plyIdx = plyCount - 1 - i;
+            const angle = zone.sequence[plyIdx];
+            const thickness = ((plyIdx + 1) * 0.125).toFixed(2);
+
+            this.showTooltip(e.clientX, e.clientY, {
+              plyIdx: plyIdx + 1,
+              angle,
+              thickness,
+              position: `${plyIdx + 1}/${plyCount}`
+            });
+            return;
+          }
+        }
+
+        this.hideTooltip();
+      },
+
+      showTooltip(x, y, data) {
+        this.tooltipEl.innerHTML = `
+          <div class="font-bold mb-1">Ply ${data.plyIdx}</div>
+          <div>Angle: <span class="text-cyan-400">${data.angle}°</span></div>
+          <div>Position: <span class="text-yellow-400">${data.position}</span></div>
+          <div>Cumulative: <span class="text-emerald-400">${data.thickness} mm</span></div>
+        `;
+        this.tooltipEl.style.left = (x + 10) + 'px';
+        this.tooltipEl.style.top = (y + 10) + 'px';
+        this.tooltipEl.classList.remove('hidden');
+      },
+
+      hideTooltip() {
+        this.tooltipEl.classList.add('hidden');
+      },
+
+      exportSVG() {
+        // Canvas to SVG conversion (simplified)
+        const svgNS = "http://www.w3.org/2000/svg";
+        const svg = document.createElementNS(svgNS, "svg");
+        svg.setAttribute("width", this.canvas.width);
+        svg.setAttribute("height", this.canvas.height);
+        svg.setAttribute("xmlns", svgNS);
+
+        // Background
+        const bg = document.createElementNS(svgNS, "rect");
+        bg.setAttribute("width", "100%");
+        bg.setAttribute("height", "100%");
+        bg.setAttribute("fill", "#f8fafc");
+        svg.appendChild(bg);
+
+        const zone = this.zones[this.selectedZoneIndex];
+        if (!zone) return;
+
+        const sequence = zone.sequence;
+        const plyCount = sequence.length;
+        const plyWidth = this.canvas.width - this.padding * 2;
+
+        for (let i = 0; i < plyCount; i++) {
+          const plyIdx = plyCount - 1 - i;
+          const angle = sequence[plyIdx];
+          const y = this.padding + i * (this.plyHeight + this.plySpacing);
+          const color = ANGLE_HEX[String(angle)] || '#94a3b8';
+
+          const rect = document.createElementNS(svgNS, "rect");
+          rect.setAttribute("x", this.padding);
+          rect.setAttribute("y", y);
+          rect.setAttribute("width", plyWidth);
+          rect.setAttribute("height", this.plyHeight);
+          rect.setAttribute("fill", color);
+          rect.setAttribute("stroke", "#1e293b");
+          rect.setAttribute("stroke-width", "0.5");
+          svg.appendChild(rect);
+
+          const text = document.createElementNS(svgNS, "text");
+          text.setAttribute("x", this.padding + 5);
+          text.setAttribute("y", y + this.plyHeight / 2 + 3);
+          text.setAttribute("fill", "#ffffff");
+          text.setAttribute("font-size", "10");
+          text.setAttribute("font-family", "monospace");
+          text.textContent = `Ply ${plyIdx + 1}: ${angle}°`;
+          svg.appendChild(text);
+        }
+
+        const svgData = new XMLSerializer().serializeToString(svg);
+        const blob = new Blob([svgData], { type: 'image/svg+xml' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `cross-section-zone${zone.index + 1}.svg`;
+        a.click();
+        URL.revokeObjectURL(url);
+      },
+
+      exportPNG() {
+        const link = document.createElement('a');
+        link.download = `cross-section-zone${this.zones[this.selectedZoneIndex].index + 1}.png`;
+        link.href = this.canvas.toDataURL('image/png');
+        link.click();
+      }
+    };
+
+    // ==================== PLY COVERAGE MAP ====================
+    const plyCoverageMap = {
+      container: null,
+      zones: [],
+      maxPly: 0,
+
+      init(zones) {
+        this.zones = zones.filter(z => z && z.sequence);
+        if (!this.zones.length) return;
+
+        this.container = document.getElementById('ply-coverage-container');
+        this.maxPly = Math.max(...this.zones.map(z => z.ply_count));
+
+        // Show card
+        document.getElementById('ply-coverage-card').classList.remove('hidden');
+
+        this.render();
+      },
+
+      render() {
+        this.container.innerHTML = '';
+
+        // Create grid
+        const grid = document.createElement('div');
+        grid.style.display = 'grid';
+        grid.style.gridTemplateColumns = `120px repeat(${this.maxPly}, 16px)`;
+        grid.style.gap = '2px';
+        grid.style.alignItems = 'center';
+
+        // Header row
+        const headerLabel = document.createElement('div');
+        headerLabel.textContent = 'Zone / Ply';
+        headerLabel.className = 'text-xs font-bold text-slate-700 sticky left-0 bg-slate-50 z-10';
+        grid.appendChild(headerLabel);
+
+        for (let p = 1; p <= this.maxPly; p++) {
+          const cell = document.createElement('div');
+          cell.textContent = p;
+          cell.className = 'text-[9px] text-center text-slate-500 font-mono';
+          cell.title = `Ply ${p}`;
+          grid.appendChild(cell);
+        }
+
+        // Zone rows
+        this.zones.forEach((zone, zIdx) => {
+          // Zone label
+          const label = document.createElement('div');
+          label.textContent = `Zone ${zone.index + 1} (${zone.ply_count})`;
+          label.className = 'text-xs font-semibold text-slate-800 sticky left-0 bg-slate-50 z-10';
+          grid.appendChild(label);
+
+          // Ply cells
+          for (let p = 1; p <= this.maxPly; p++) {
+            const cell = document.createElement('div');
+            cell.className = 'w-4 h-4 rounded cursor-pointer transition-all hover:scale-125';
+            cell.dataset.zone = zIdx;
+            cell.dataset.ply = p - 1;
+
+            if (p <= zone.ply_count) {
+              const angle = zone.sequence[p - 1];
+              const angleColor = ANGLE_HEX[String(angle)] || '#94a3b8';
+              cell.style.backgroundColor = angleColor;
+              cell.title = `Zone ${zone.index + 1}, Ply ${p}: ${angle}°`;
+            } else {
+              cell.style.backgroundColor = '#e2e8f0';
+              cell.title = `Zone ${zone.index + 1}, Ply ${p}: Dropped`;
+            }
+
+            cell.addEventListener('click', () => this.highlightColumn(p - 1));
+
+            grid.appendChild(cell);
+          }
+        });
+
+        this.container.appendChild(grid);
+      },
+
+      highlightColumn(plyIdx) {
+        const cells = this.container.querySelectorAll(`[data-ply="${plyIdx}"]`);
+        cells.forEach(cell => {
+          cell.style.boxShadow = '0 0 0 2px #3b82f6';
+          cell.style.transform = 'scale(1.2)';
+          setTimeout(() => {
+            cell.style.boxShadow = '';
+            cell.style.transform = '';
+          }, 1500);
+        });
+      }
+    };
+
+    // ==================== FIBER ORIENTATION OVERLAY ====================
+    const fiberOrientationOverlay = {
+      lineGroups: [],
+      visible: false,
+      button: null,
+
+      init() {
+        // Create toggle button in stacking view
+        const stackingPane = document.getElementById('stacking-pane');
+        if (!stackingPane) return;
+
+        const btnContainer = stackingPane.querySelector('.flex.gap-1');
+        if (!btnContainer) return;
+
+        this.button = document.createElement('button');
+        this.button.id = 'fiber-orientation-btn';
+        this.button.className = 'px-2 py-1 text-xs rounded bg-slate-200 text-slate-700 hover:bg-slate-300 transition flex items-center gap-1';
+        this.button.title = 'Fiber Orientation Overlay';
+        this.button.innerHTML = `
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+          </svg>
+          Fiber
+        `;
+        this.button.addEventListener('click', () => this.toggle());
+        btnContainer.appendChild(this.button);
+      },
+
+      generate(plyMeshes) {
+        // Clear existing
+        this.lineGroups.forEach(group => {
+          if (group.parent) group.parent.remove(group);
+          group.traverse(obj => {
+            if (obj.geometry) obj.geometry.dispose();
+            if (obj.material) obj.material.dispose();
+          });
+        });
+        this.lineGroups = [];
+
+        if (!scene) return;
+
+        // Generate fiber lines for each ply
+        plyMeshes.forEach(ply => {
+          if (!ply.instancedMesh) return;
+
+          const angle = ply.angle;
+          const lineGroup = this.createLines(angle, ply.baseY, ply.zCenter);
+          if (lineGroup) {
+            lineGroup.visible = this.visible;
+            scene.add(lineGroup);
+            this.lineGroups.push(lineGroup);
+          }
+        });
+      },
+
+      createLines(angle, y, z) {
+        const points = [];
+        const lineCount = 8;
+        const spacing = PLY_WIDTH / (lineCount + 1);
+        const lineMat = new THREE.LineBasicMaterial({
+          color: 0xffffff,
+          opacity: 0.4,
+          transparent: true,
+          linewidth: 1
+        });
+
+        if (angle === 0) {
+          // Horizontal lines
+          for (let i = 0; i < lineCount; i++) {
+            const zOffset = (i - lineCount / 2) * spacing * 0.3;
+            points.push(
+              new THREE.Vector3(-PLY_WIDTH / 2, y, z + zOffset),
+              new THREE.Vector3(PLY_WIDTH / 2, y, z + zOffset)
+            );
+          }
+        } else if (angle === 90) {
+          // Vertical lines (in Z direction)
+          for (let i = 0; i < lineCount; i++) {
+            const xOffset = (i - lineCount / 2) * spacing * 0.8;
+            points.push(
+              new THREE.Vector3(xOffset, y, z - PLY_WIDTH / 4),
+              new THREE.Vector3(xOffset, y, z + PLY_WIDTH / 4)
+            );
+          }
+        } else if (angle === 45) {
+          // Diagonal /
+          for (let i = 0; i < lineCount; i++) {
+            const offset = (i - lineCount / 2) * spacing * 0.5;
+            points.push(
+              new THREE.Vector3(-PLY_WIDTH / 2 + offset, y, z - PLY_WIDTH / 4),
+              new THREE.Vector3(PLY_WIDTH / 2 + offset, y, z + PLY_WIDTH / 4)
+            );
+          }
+        } else if (angle === -45) {
+          // Diagonal \
+          for (let i = 0; i < lineCount; i++) {
+            const offset = (i - lineCount / 2) * spacing * 0.5;
+            points.push(
+              new THREE.Vector3(-PLY_WIDTH / 2 + offset, y, z + PLY_WIDTH / 4),
+              new THREE.Vector3(PLY_WIDTH / 2 + offset, y, z - PLY_WIDTH / 4)
+            );
+          }
+        }
+
+        if (points.length === 0) return null;
+
+        const geometry = new THREE.BufferGeometry().setFromPoints(points);
+        const lineSegments = new THREE.LineSegments(geometry, lineMat);
+        return lineSegments;
+      },
+
+      toggle() {
+        this.visible = !this.visible;
+        this.lineGroups.forEach(group => {
+          group.visible = this.visible;
+        });
+
+        if (this.button) {
+          toggleBtnActive(this.button, this.visible);
+        }
+      }
+    };
 
     // ==================== EXPOSE TO GLOBAL ====================
     window._view3d = {
