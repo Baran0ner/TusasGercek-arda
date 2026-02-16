@@ -19,7 +19,7 @@ if __name__ == "__main__":
     def open_browser():
         import time
         time.sleep(1.2)
-        webbrowser.open("http://127.0.0.1:5000/")
+        #webbrowser.open("http://127.0.0.1:5000/")
     print("\n  Tarayicida acin: http://127.0.0.1:5000")
     print("  (https DEGIL, http kullanin - sunucu acik kalmali.)\n")
     threading.Thread(target=open_browser, daemon=True).start()

@@ -39,7 +39,7 @@ class MultiZoneOptimizer:
         results = optimizer.optimize_all()
     """
 
-    MAX_ROOT_RETRIES = 3  # Root güncellemesi için maksimum deneme
+    MAX_ROOT_RETRIES = 5  # Root güncellemesi için maksimum deneme
 
     def __init__(self, zones_config: List[Dict[int, int]],
                  bounds: Optional[List[Dict]] = None,
@@ -55,16 +55,6 @@ class MultiZoneOptimizer:
         self.zones_config = []
         for zone in zones_config:
             converted = {int(k): int(v) for k, v in zone.items()}
-
-            # Özel normalizasyon: 8-7-7-8 gibi ±45 sayıları tek ise,
-            # her ikisini de 1'er azaltarak (örn. 8-6-6-8) daha simetrik
-            # ve drop-off açısından uygulanabilir bir hedefe çek.
-            c45 = converted.get(45, 0)
-            cm45 = converted.get(-45, 0)
-            if c45 > 0 and cm45 > 0 and (c45 % 2 == 1) and (cm45 % 2 == 1):
-                converted[45] = c45 - 1
-                converted[-45] = cm45 - 1
-
             self.zones_config.append(converted)
         
         # Her zone'un toplam ply sayısını hesapla
@@ -323,7 +313,16 @@ class MultiZoneOptimizer:
                     # Fitness hesapla
                     target_optimizer = LaminateOptimizer(target_config)
                     fitness, details = target_optimizer.calculate_fitness(new_seq)
-                    
+
+                    # Drop-off sonrası kısa local search ile kaliteyi artır
+                    if fitness > 0:
+                        polished_seq, polished_score = target_optimizer._local_search(new_seq, max_iter=25)
+                        if polished_score > fitness:
+                            new_seq = polished_seq
+                            fitness = polished_score
+                            _, details = target_optimizer.calculate_fitness(new_seq)
+                            print(f"  Zone {zone_idx + 1} polish: {polished_score:.2f}/100")
+
                     zone_results[zone_idx] = {
                         "index": zone_idx,
                         "sequence": new_seq,

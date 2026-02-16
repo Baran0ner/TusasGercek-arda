@@ -16,18 +16,18 @@ class LaminateOptimizer:
 
     # Class-level weight constants for consistent scoring (Total = 100)
     WEIGHTS = {
-        "R1": 20.0,    # Symmetry
+        "R1": 18.0,    # Symmetry
         "R2": 12.0,    # Balance
         "R3": 13.0,    # Percentage
         "R4": 12.0,    # External plies
-        "R5": 14.0,    # Distribution (dağılım en önemli görsel kalite faktörü)
-        "R6": 22.0,    # Grouping
+        "R5": 14.0,    # Distribution (dağılım ağırlığı artırıldı)
+        "R6": 20.5,    # Grouping (grouping ağırlığı artırıldı)
         "R7": 3.5,     # Buckling (hafif tercih, zorunluluk değil)
-        "R8": 3.5,     # Lateral bending (hafif tercih)
+        "R8": 7.0,     # Lateral bending (90° simetri ekseninden uzak olsun yeter)
     }
 
     # Thresholds for various rules
-    LATERAL_BENDING_THRESHOLD = 0.15
+    LATERAL_BENDING_THRESHOLD = 0.20
     DISTRIBUTION_STD_RATIO = 0.7
     DROP_OFF_ATTEMPTS = 3000
     ANGLE_TARGET_DROP_ATTEMPTS = 3000
@@ -104,12 +104,21 @@ class LaminateOptimizer:
         elif available_m45 >= 2:
             left_half = [-45, -45]
             angle_counts_left[-45] = 2
-        elif available_45 >= 1:
-            left_half = [45]
-            angle_counts_left[45] = 1
-        elif available_m45 >= 1:
-            left_half = [-45]
-            angle_counts_left[-45] = 1
+        else:
+            # Yetersiz ±45 stoku - mevcut olanı 2'ye tamamla
+            # (simetrik yapıda en az 2 ±45 gerekli)
+            if available_45 >= 1:
+                left_half = [45, 45]
+                angle_counts_left[45] = min(2, available_45)
+                # Eksik kalan ±45 sayısı fazladan eklenecek
+            elif available_m45 >= 1:
+                left_half = [-45, -45]
+                angle_counts_left[-45] = min(2, available_m45)
+            else:
+                # Hiç ±45 yok - yine de ±45 koy (hard constraint gerektiriyor)
+                left_half = [45, -45]
+                angle_counts_left[45] = 1
+                angle_counts_left[-45] = 1
 
         # Kalan pozisyonları doldur
         pool_copy = self.initial_pool[:]
@@ -137,22 +146,12 @@ class LaminateOptimizer:
                         left_half.append(ply)
                 break
 
-        # İlk 2 pozisyonu koru, gerisini karıştır
+        # İlk 2 pozisyonu koru, gerisini greedy yerleştir (0-90 bitişiklik önleme + 90° dış yüzey bias)
         fixed_head = left_half[:2]
         rest = left_half[2:]
-        random.shuffle(rest)
-        rest = self._fix_adjacent_0_90(rest)
+        prev_ply = fixed_head[-1] if fixed_head else None
+        rest = self._greedy_no_adjacent_0_90(rest, prev_ply)
         left_half = fixed_head + rest
-
-        # İlk 2 ile 3. eleman arası 0-90 kontrolü
-        if len(left_half) > 2:
-            if (left_half[1] == 0 and left_half[2] == 90) or (left_half[1] == 90 and left_half[2] == 0):
-                # 3. elemanı en yakın uygun elemanla swap et
-                for k in range(3, len(left_half)):
-                    if not ((left_half[1] == 0 and left_half[k] == 90) or 
-                            (left_half[1] == 90 and left_half[k] == 0)):
-                        left_half[2], left_half[k] = left_half[k], left_half[2]
-                        break
 
         right_half = left_half[::-1]
 
@@ -171,6 +170,69 @@ class LaminateOptimizer:
             assert expected == actual, "Angle {} count mismatch: expected {}, got {}".format(angle, expected, actual)
 
         return sequence
+
+    def _greedy_no_adjacent_0_90(self, plies, prev_ply=None):
+        """Greedy yerleştirme: 0-90 bitişikliğini önle, 90°'yi simetri ekseninden uzak tut,
+        3+ grouping'i engelle.
+
+        Strateji:
+        - 90° plyleri simetri eksenine yakın iç %20'lik bölgeye KOYMAZ
+        - 90° plyleri kalan %80'lik bölgeye eşit aralıklarla dağıtır (kenara yığmaz)
+        - Tüm açılar için 0-90 bitişikliği ve 3+ grouping'i engeller
+
+        Args:
+            plies: Yerleştirilecek ply listesi (left half'ın external plies sonrası kısmı)
+            prev_ply: Önceki ply açısı (boundary kontrolü için)
+        Returns:
+            Yeniden sıralanmış ply listesi
+        """
+        n = len(plies)
+        if n == 0:
+            return plies
+
+        # Tüm plyleri karıştır, sonra 0-90 bitişiklik ve grouping kontrolü ile yerleştir
+        # 90°'yi sadece iç %20'den uzak tut, geri kalanı serbest dağıt
+        pool = plies[:]
+        random.shuffle(pool)
+
+        # İç %20'lik yasak bölge (merkeze yakın kısım)
+        forbidden_start = int(n * 0.80)  # Son %20 = merkeze yakın
+
+        result = []
+        remaining = list(pool)
+
+        while remaining:
+            pos = len(result)  # Şu anki yerleştirme pozisyonu
+            last = result[-1] if result else prev_ply
+            second_last = result[-2] if len(result) >= 2 else None
+            placed = False
+
+            for j in range(len(remaining)):
+                candidate = remaining[j]
+
+                # 90° iç bölgeye konmasın
+                if candidate == 90 and pos >= forbidden_start:
+                    continue
+
+                # 0-90 bitişiklik kontrolü
+                if last is not None:
+                    if (last == 0 and candidate == 90) or (last == 90 and candidate == 0):
+                        continue
+
+                # 3+ grouping kontrolü
+                if last is not None and second_last is not None:
+                    if candidate == last == second_last:
+                        continue
+
+                result.append(remaining.pop(j))
+                placed = True
+                break
+
+            if not placed:
+                # Hiçbir uygun seçenek bulunamadı - zorunlu yerleştirme
+                result.append(remaining.pop(0))
+
+        return result
 
     @staticmethod
     def _fix_adjacent_0_90(seq):
@@ -507,12 +569,11 @@ class LaminateOptimizer:
     def _check_lateral_bending(self, sequence: List[int]) -> float:
         """Rule 8: Lateral bending - 90° katmanlar dış yüzeylerde olmalı (orta düzlemden uzak).
 
-        Lateral bending sertliği için 90° katmanlar dış yüzeylerde olmalı.
-        Ortaya yakın 90°'ler agresif şekilde cezalandırılır; tam orta düzlemde
-        tek başına duran 90° neredeyse hard-fail gibi davranır.
+        Lateral bending sertliği için 90° katmanlar sequence'in dış taraflarında olmalı.
+        Ortaya yakın 90°'ler agresif şekilde cezalandırılır.
         """
         max_penalty = self.WEIGHTS["R8"]
-        threshold = self.LATERAL_BENDING_THRESHOLD
+        threshold = self.LATERAL_BENDING_THRESHOLD  # 0.25
         n = len(sequence)
         mid = (n - 1) / 2
 
@@ -527,9 +588,9 @@ class LaminateOptimizer:
             dist = abs(pos - mid) / max(1, mid)
             if dist < threshold:
                 proximity = (threshold - dist) / threshold
-                # Ortaya ne kadar yakınsa katlanarak artan ceza
-                penalty_sum += (proximity ** 0.6) * 1.0
-                if dist < 0.15:
+                # Daha agresif ceza eğrisi: düşük üs + yüksek çarpan
+                penalty_sum += (proximity ** 0.4) * 1.5
+                if dist < 0.20:
                     center_hits += 1
 
         total_90_count = len(positions_90)
@@ -538,10 +599,10 @@ class LaminateOptimizer:
         else:
             normalized_penalty = 0.0
 
-        # Orta düzlemin tam çevresinde (dist<0.15) birden fazla 90° varsa,
-        # lateral bending kuralını neredeyse tamamen ihlal etmiş say ve
-        # maksimum cezanın büyük kısmını uygula.
-        if center_hits > 0:
+        # Orta düzlemde 90° varsa neredeyse full penalty
+        if center_hits >= 2:
+            normalized_penalty = max(normalized_penalty, max_penalty * 0.95)
+        elif center_hits == 1:
             normalized_penalty = max(normalized_penalty, max_penalty * 0.85)
 
         return min(normalized_penalty, max_penalty)

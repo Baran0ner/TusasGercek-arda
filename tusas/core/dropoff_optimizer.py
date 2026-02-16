@@ -284,25 +284,32 @@ class DropOffOptimizer:
 
             We remove symmetric pairs (left idx + its mirror) one pair at a time,
             choosing the best-scoring (hard-constraints-safe) removal each step.
+            For angles needing odd drops, single ply removal is done after pair drops.
 
             Returns:
               (new_seq, score, dropped_by_angle_in_original_parent_index_space) or None
             """
-            # Only supports symmetric pair removals (even deltas per angle)
             seq = seq_in[:]
             pos_map = list(range(len(seq_in)))  # current position -> original index in parent sequence
             dropped_by_angle: Dict[int, List[int]] = {}
 
-            # Fast feasibility checks for this fallback
+            # Feasibility check + separate even/odd deltas
             current = Counter(seq)
+            greedy_pair_targets = {}  # Çift drop hedefleri (simetrik çift drop ile ulaşılacak)
+            greedy_single_angles = []  # Tek kalan 1 ply drop gereken açılar
+
             for ang, tgt in target_counts_in.items():
                 if tgt > current.get(ang, 0):
                     return None
                 delta = current.get(ang, 0) - tgt
                 if delta % 2 != 0:
-                    return None
+                    # Tek delta: çift kısmı pair drop, kalan 1'i single drop
+                    greedy_single_angles.append(int(ang))
+                    greedy_pair_targets[int(ang)] = tgt + 1  # Çift hedefe pair drop
+                else:
+                    greedy_pair_targets[int(ang)] = tgt
 
-            # Iteratively drop until all targets satisfied
+            # Phase 1: Iteratively pair-drop until even targets satisfied
             safety_iter = 0
             while True:
                 safety_iter += 1
@@ -310,23 +317,20 @@ class DropOffOptimizer:
                     return None
 
                 current = Counter(seq)
-                # done?
+                # Pair drop phase done?
                 done = True
-                for ang, tgt in target_counts_in.items():
+                for ang, tgt in greedy_pair_targets.items():
                     if current.get(ang, 0) > tgt:
                         done = False
                         break
                 if done:
-                    score, _details = self.base_opt.calculate_fitness(seq)
-                    if score <= 0:
-                        return None
-                    return seq, float(score), {a: sorted(v) for a, v in dropped_by_angle.items()}
+                    break
 
                 n = len(seq)
                 half = n // 2
                 best = None  # (score, ang, left_idx, drop_positions_set)
 
-                for ang, tgt in target_counts_in.items():
+                for ang, tgt in greedy_pair_targets.items():
                     need = current.get(ang, 0) - tgt
                     if need < 2:
                         continue
@@ -339,15 +343,15 @@ class DropOffOptimizer:
                             continue
                         right_idx = n - 1 - left_idx
                         if right_idx == left_idx:
-                            continue  # should not happen for even n
+                            continue
                         if seq[right_idx] != ang:
-                            continue  # symmetry broken; skip
+                            continue
 
                         drop_set = {left_idx, right_idx}
                         temp_seq = [a for i, a in enumerate(seq) if i not in drop_set]
                         sc, _ = self.base_opt.calculate_fitness(temp_seq)
                         if sc <= 0:
-                            continue  # violates hard constraints
+                            continue
 
                         cand = (float(sc), ang, left_idx, drop_set)
                         if best is None or cand[0] > best[0]:
@@ -360,15 +364,79 @@ class DropOffOptimizer:
                 right_idx = max(drop_set)
                 left_idx = min(drop_set)
 
-                # Record original indices (in parent sequence index space)
                 orig_left = pos_map[left_idx]
                 orig_right = pos_map[right_idx]
                 dropped_by_angle.setdefault(int(ang), []).extend([orig_left, orig_right])
 
-                # Apply drop (remove higher index first)
                 for idx in sorted(drop_set, reverse=True):
                     seq.pop(idx)
                     pos_map.pop(idx)
+
+            # Phase 2: Single ply drops for odd-delta angles (asimetrik, hafif simetri kaybı)
+            if len(greedy_single_angles) >= 2:
+                # Birden fazla single drop: birlikte kaldırmayı dene (0-90 separator sorunu)
+                n = len(seq)
+                angle_positions = {}
+                for ang in greedy_single_angles:
+                    angle_positions[ang] = [i for i in range(2, n - 2) if seq[i] == ang]
+
+                # Tüm kombinasyonları dene, en iyi skoru bul
+                from itertools import product
+                pos_lists = [angle_positions[ang] for ang in greedy_single_angles]
+                best_combo = None
+                best_combo_score = -1.0
+
+                for combo in product(*pos_lists):
+                    if len(set(combo)) != len(combo):
+                        continue  # Aynı pozisyon birden fazla açı için seçilmişse atla
+                    drop_set = set(combo)
+                    temp = [seq[k] for k in range(n) if k not in drop_set]
+                    temp = LaminateOptimizer._fix_adjacent_0_90(temp)
+                    sc, _ = self.base_opt.calculate_fitness(temp)
+                    if sc > best_combo_score:
+                        best_combo_score = sc
+                        best_combo = combo
+
+                if best_combo is None or best_combo_score <= 0:
+                    return None
+
+                # Birleşik kaldırma uygula
+                for ang, pos in zip(greedy_single_angles, best_combo):
+                    orig_idx = pos_map[pos]
+                    dropped_by_angle.setdefault(int(ang), []).append(orig_idx)
+
+                # Yüksek index'ten düşüğe doğru pop (index kayması önleme)
+                for pos in sorted(best_combo, reverse=True):
+                    seq.pop(pos)
+                    pos_map.pop(pos)
+                # 0°-90° bitişiklik düzelt
+                seq = LaminateOptimizer._fix_adjacent_0_90(seq)
+            elif len(greedy_single_angles) == 1:
+                # Tek single drop: sıralı kaldırma yeterli
+                ang = greedy_single_angles[0]
+                n = len(seq)
+                best_pos = None
+                best_score = -1.0
+                for i in range(2, n - 2):
+                    if seq[i] != ang:
+                        continue
+                    temp = seq[:i] + seq[i + 1:]
+                    sc, _ = self.base_opt.calculate_fitness(temp)
+                    if sc > best_score:
+                        best_score = sc
+                        best_pos = i
+                if best_pos is None or best_score <= 0:
+                    return None
+                orig_idx = pos_map[best_pos]
+                dropped_by_angle.setdefault(int(ang), []).append(orig_idx)
+                seq.pop(best_pos)
+                pos_map.pop(best_pos)
+
+            # Final validation
+            score, _details = self.base_opt.calculate_fitness(seq)
+            if score <= 0:
+                return None
+            return seq, float(score), {a: sorted(v) for a, v in dropped_by_angle.items()}
 
         def _beam_search_angle_target_drop(
             seq_in: List[int],
@@ -381,10 +449,7 @@ class DropOffOptimizer:
 
             Beam-search over symmetric-pair drops to reach *exact* target counts while
             respecting hard constraints (fitness > 0).
-
-            Notes:
-            - Works for symmetric pair removals only (even deltas for each angle).
-            - Keeps top-N candidates by fitness at each drop step.
+            For angles needing odd drops, single ply removal is done after beam search.
             """
             if beam_width < 1:
                 beam_width = 1
@@ -393,99 +458,167 @@ class DropOffOptimizer:
             pos0 = list(range(len(seq0)))  # current position -> original index (parent index space)
             current0 = Counter(seq0)
 
-            # Determine required symmetric pair drops per angle
+            # Determine required symmetric pair drops per angle + single drops for odd deltas
             pairs_needed = {}  # angle -> number of PAIRS to remove
+            beam_single_angles = []  # angles needing 1 extra single drop
+
             for ang, tgt in target_counts_in.items():
                 cur = current0.get(ang, 0)
                 if tgt > cur:
                     return None
                 delta = cur - tgt
                 if delta % 2 != 0:
-                    return None
-                if delta > 0:
-                    pairs_needed[int(ang)] = delta // 2
+                    beam_single_angles.append(int(ang))
+                    pair_delta = delta - 1  # Çift kısım
+                else:
+                    pair_delta = delta
+                if pair_delta > 0:
+                    pairs_needed[int(ang)] = pair_delta // 2
 
             total_pairs = sum(pairs_needed.values())
-            if total_pairs == 0:
+            if total_pairs == 0 and not beam_single_angles:
                 sc, _ = self.base_opt.calculate_fitness(seq0)
                 if sc <= 0:
                     return None
                 return seq0, float(sc), {}
 
-            # Beam state: (score, seq, pos_map, pairs_left, dropped_by_angle)
+            # Phase 1: Beam search for symmetric pair drops
             sc0, _ = self.base_opt.calculate_fitness(seq0)
             if sc0 <= 0:
                 return None
-            beam = [(float(sc0), seq0, pos0, dict(pairs_needed), {})]
 
-            for _step in range(total_pairs):
-                next_states = []
+            if total_pairs > 0:
+                beam = [(float(sc0), seq0, pos0, dict(pairs_needed), {})]
 
-                for _score, seq, pos_map, pairs_left, dropped in beam:
-                    n = len(seq)
-                    half = n // 2
+                for _step in range(total_pairs):
+                    next_states = []
 
-                    # Expand candidates in stable order
-                    for ang in sorted([a for a, k in pairs_left.items() if k > 0]):
-                        # candidate left positions for this angle
-                        for left_idx in range(max(protect_left_min_idx, 0), half):
-                            if seq[left_idx] != ang:
-                                continue
-                            right_idx = n - 1 - left_idx
-                            if right_idx == left_idx:
-                                continue
-                            if seq[right_idx] != ang:
-                                continue
+                    for _score, seq, pos_map, pairs_left, dropped in beam:
+                        n = len(seq)
+                        half = n // 2
 
-                            # Apply drop (pop higher index first)
-                            temp_seq = seq[:]
-                            temp_pos = pos_map[:]
-                            # record original indices before popping
-                            orig_left = temp_pos[left_idx]
-                            orig_right = temp_pos[right_idx]
+                        for ang in sorted([a for a, k in pairs_left.items() if k > 0]):
+                            for left_idx in range(max(protect_left_min_idx, 0), half):
+                                if seq[left_idx] != ang:
+                                    continue
+                                right_idx = n - 1 - left_idx
+                                if right_idx == left_idx:
+                                    continue
+                                if seq[right_idx] != ang:
+                                    continue
 
-                            temp_seq.pop(right_idx)
-                            temp_pos.pop(right_idx)
-                            temp_seq.pop(left_idx)
-                            temp_pos.pop(left_idx)
+                                temp_seq = seq[:]
+                                temp_pos = pos_map[:]
+                                orig_left = temp_pos[left_idx]
+                                orig_right = temp_pos[right_idx]
 
-                            sc, _ = self.base_opt.calculate_fitness(temp_seq)
-                            if sc <= 0:
-                                continue
+                                temp_seq.pop(right_idx)
+                                temp_pos.pop(right_idx)
+                                temp_seq.pop(left_idx)
+                                temp_pos.pop(left_idx)
 
-                            new_pairs_left = dict(pairs_left)
-                            new_pairs_left[ang] = new_pairs_left.get(ang, 0) - 1
-                            if new_pairs_left[ang] <= 0:
-                                new_pairs_left.pop(ang, None)
+                                sc, _ = self.base_opt.calculate_fitness(temp_seq)
+                                if sc <= 0:
+                                    continue
 
-                            new_dropped = {k: v[:] for k, v in dropped.items()}
-                            new_dropped.setdefault(int(ang), []).extend([orig_left, orig_right])
+                                new_pairs_left = dict(pairs_left)
+                                new_pairs_left[ang] = new_pairs_left.get(ang, 0) - 1
+                                if new_pairs_left[ang] <= 0:
+                                    new_pairs_left.pop(ang, None)
 
-                            next_states.append((float(sc), temp_seq, temp_pos, new_pairs_left, new_dropped))
+                                new_dropped = {k: v[:] for k, v in dropped.items()}
+                                new_dropped.setdefault(int(ang), []).extend([orig_left, orig_right])
 
-                if not next_states:
+                                next_states.append((float(sc), temp_seq, temp_pos, new_pairs_left, new_dropped))
+
+                    if not next_states:
+                        return None
+
+                    next_states.sort(key=lambda x: x[0], reverse=True)
+                    seen = set()
+                    new_beam = []
+                    for st in next_states:
+                        key = tuple(st[1])
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        new_beam.append(st)
+                        if len(new_beam) >= beam_width:
+                            break
+                    beam = new_beam
+
+                best = max(beam, key=lambda x: x[0])
+            else:
+                # No pair drops needed, only single drops
+                best = (float(sc0), seq0[:], pos0[:], {}, {})
+
+            best_seq = best[1]
+            best_pos_map = best[2]
+            best_dropped = best[4] if len(best) > 4 else {}
+
+            # Phase 2: Single ply drops for odd-delta angles
+            if len(beam_single_angles) >= 2:
+                # Birden fazla single drop: birlikte kaldır (separator sorunu)
+                from itertools import product
+                n = len(best_seq)
+                angle_positions = {}
+                for ang in beam_single_angles:
+                    angle_positions[ang] = [i for i in range(2, n - 2) if best_seq[i] == ang]
+
+                pos_lists = [angle_positions[ang] for ang in beam_single_angles]
+                best_combo = None
+                best_combo_score = -1.0
+
+                for combo in product(*pos_lists):
+                    if len(set(combo)) != len(combo):
+                        continue
+                    drop_set = set(combo)
+                    temp = [best_seq[k] for k in range(n) if k not in drop_set]
+                    temp = LaminateOptimizer._fix_adjacent_0_90(temp)
+                    sc, _ = self.base_opt.calculate_fitness(temp)
+                    if sc > best_combo_score:
+                        best_combo_score = sc
+                        best_combo = combo
+
+                if best_combo is None or best_combo_score <= 0:
                     return None
 
-                # Keep best-scoring unique sequences to avoid beam collapse into duplicates
-                next_states.sort(key=lambda x: x[0], reverse=True)
-                seen = set()
-                new_beam = []
-                for st in next_states:
-                    key = tuple(st[1])
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    new_beam.append(st)
-                    if len(new_beam) >= beam_width:
-                        break
-                beam = new_beam
+                best_dropped = {k: v[:] for k, v in best_dropped.items()}
+                for ang, pos in zip(beam_single_angles, best_combo):
+                    orig_idx = best_pos_map[pos]
+                    best_dropped.setdefault(int(ang), []).append(orig_idx)
 
-            # All pairs removed; pick best by score
-            best = max(beam, key=lambda x: x[0])
-            best_seq = best[1]
-            best_score = best[0]
-            best_dropped = {a: sorted(v) for a, v in best[4].items()}
-            return best_seq, float(best_score), best_dropped
+                for pos in sorted(best_combo, reverse=True):
+                    best_seq.pop(pos)
+                    best_pos_map.pop(pos)
+                # 0°-90° bitişiklik düzelt
+                best_seq = LaminateOptimizer._fix_adjacent_0_90(best_seq)
+            elif len(beam_single_angles) == 1:
+                ang = beam_single_angles[0]
+                n = len(best_seq)
+                best_pos = None
+                best_sc = -1.0
+                for i in range(2, n - 2):
+                    if best_seq[i] != ang:
+                        continue
+                    temp = best_seq[:i] + best_seq[i + 1:]
+                    sc, _ = self.base_opt.calculate_fitness(temp)
+                    if sc > best_sc:
+                        best_sc = sc
+                        best_pos = i
+                if best_pos is None or best_sc <= 0:
+                    return None
+                orig_idx = best_pos_map[best_pos]
+                best_dropped = {k: v[:] for k, v in best_dropped.items()}
+                best_dropped.setdefault(int(ang), []).append(orig_idx)
+                best_seq.pop(best_pos)
+                best_pos_map.pop(best_pos)
+
+            # Final validation
+            final_score, _ = self.base_opt.calculate_fitness(best_seq)
+            if final_score <= 0:
+                return None
+            return best_seq, float(final_score), {a: sorted(v) for a, v in best_dropped.items()}
 
         # 1. Validation: Target counts kontrolü
         current_counts = dict(Counter(self.master_sequence))
@@ -552,7 +685,10 @@ class DropOffOptimizer:
             if break_pair_angle is None and drops_needed:
                 break_pair_angle = list(drops_needed.keys())[0]
 
-        # Her açının drop sayısı çift olmalı (simetrik drop için)
+        # Her açının simetrik (çift) drop sayısını belirle
+        # Tek kalan 1 ply asimetrik drop ile çözülecek (hafif simetri kaybı kabul edilir)
+        single_ply_drops = {}  # angle -> 1 (asimetrik tek ply drop gerekiyor)
+
         for angle in list(drops_needed.keys()):
             if drops_needed[angle] % 2 != 0:
                 # Tek sayıda drop varsa, ortadaki ply bu açıdansa onu kullan
@@ -562,10 +698,14 @@ class DropOffOptimizer:
                     if drops_needed[angle] == 0:
                         del drops_needed[angle]
                 else:
-                    # Çift yap (bir fazla drop)
-                    drops_needed[angle] += 1
+                    # Tek kalan 1 ply'ı asimetrik drop ile çöz
+                    single_ply_drops[angle] = 1
+                    drops_needed[angle] -= 1  # Çift sayıya indir
+                    if drops_needed[angle] == 0:
+                        del drops_needed[angle]
 
         angle_positions_left = {}  # Her açının sol yarıdaki pozisyonları
+        angle_grouped_left = {}   # Her açının gruplanmış (ikili+) pozisyonları
         all_angles_to_check = set(drops_needed.keys())
         if break_pair_angle:
             all_angles_to_check.add(break_pair_angle)
@@ -576,26 +716,63 @@ class DropOffOptimizer:
             positions = [p for p in positions if p > 1]
             angle_positions_left[angle] = positions
 
+            # Gruplanmış pozisyonları bul (yan yana aynı açı olan pozisyonlar)
+            # Bu pozisyonlardan drop yapılırsa grouping kırılır
+            grouped = set()
+            for p in positions:
+                if p > 0 and self.master_sequence[p - 1] == angle:
+                    grouped.add(p)
+                if p < n - 1 and self.master_sequence[p + 1] == angle:
+                    grouped.add(p)
+            angle_grouped_left[angle] = [p for p in positions if p in grouped]
+
+        # Asimetrik tek-ply drop'lar için tüm pozisyonlar (sol+sağ yarı)
+        angle_positions_all = {}
+        for angle in single_ply_drops:
+            positions = [i for i in range(n) if self.master_sequence[i] == angle]
+            # External plies koruması: ilk 2 ve son 2 katmanı koru
+            positions = [p for p in positions if 1 < p < n - 2]
+            angle_positions_all[angle] = positions
+
         # 4. En iyi drop kombinasyonunu bul
         best_candidate = None
         best_score = -1
         best_dropped_by_angle = {}
 
         attempts = self.base_opt.ANGLE_TARGET_DROP_ATTEMPTS
-        for _ in range(attempts):
-            # Her açı için random drop pozisyonları seç (sol yarıdan)
+        for attempt_idx in range(attempts):
+            # Her açı için drop pozisyonları seç (sol yarıdan)
+            # %70 ihtimalle gruplanmış pozisyonları tercih et (grouping kırma stratejisi)
             left_drops_by_angle = {}
             valid = True
+            prefer_grouped = random.random() < 0.70
 
             for angle, drop_count in drops_needed.items():
                 pairs_needed = drop_count // 2  # Simetrik droplar
                 available = angle_positions_left.get(angle, [])
+                grouped = angle_grouped_left.get(angle, [])
 
                 if len(available) < pairs_needed:
                     valid = False
                     break
 
-                selected = random.sample(available, pairs_needed)
+                if prefer_grouped and grouped:
+                    # Gruplanmış pozisyonlardan öncelikli seç
+                    ungrouped = [p for p in available if p not in grouped]
+                    if len(grouped) >= pairs_needed:
+                        selected = random.sample(grouped, pairs_needed)
+                    else:
+                        # Gruplanmış yetmiyorsa, kalanı ungrouped'dan al
+                        selected = list(grouped)
+                        remaining = pairs_needed - len(selected)
+                        if len(ungrouped) >= remaining:
+                            selected += random.sample(ungrouped, remaining)
+                        else:
+                            selected += ungrouped
+                    selected = selected[:pairs_needed]
+                else:
+                    selected = random.sample(available, pairs_needed)
+
                 left_drops_by_angle[angle] = sorted(selected)
 
             if not valid:
@@ -617,7 +794,8 @@ class DropOffOptimizer:
 
             # Simetrik pozisyonları ekle (sağ yarıdan)
             all_drops = []
-            dropped_by_angle = {angle: [] for angle in drops_needed.keys()}
+            all_drop_angles = set(drops_needed.keys()) | set(single_ply_drops.keys())
+            dropped_by_angle = {angle: [] for angle in all_drop_angles}
 
             for angle, left_positions in left_drops_by_angle.items():
                 for idx in left_positions:
@@ -649,10 +827,32 @@ class DropOffOptimizer:
                         dropped_by_angle[break_pair_angle] = []
                     dropped_by_angle[break_pair_angle].append(mirror_idx)
 
+            # Asimetrik tek-ply drop'ları ekle (simetriyi hafifçe kırarak hedef açı sayısına ulaş)
+            single_valid = True
+            if single_ply_drops:
+                drops_set = set(all_drops)
+                for s_angle in single_ply_drops:
+                    available_for_single = [p for p in angle_positions_all.get(s_angle, [])
+                                            if p not in drops_set]
+                    if not available_for_single:
+                        single_valid = False
+                        break
+                    single_pos = random.choice(available_for_single)
+                    all_drops.append(single_pos)
+                    drops_set.add(single_pos)
+                    dropped_by_angle[s_angle].append(single_pos)
+
+            if not single_valid:
+                continue
+
             all_drops.sort()
 
             # Yeni sequence oluştur
             temp_seq = [ang for i, ang in enumerate(self.master_sequence) if i not in all_drops]
+
+            # Single drop'lar 0°-90° bitişiklik yaratmışsa swap ile düzelt
+            if single_ply_drops:
+                temp_seq = LaminateOptimizer._fix_adjacent_0_90(temp_seq)
 
             # Fitness hesapla
             score, details = self.base_opt.calculate_fitness(temp_seq)
@@ -674,9 +874,25 @@ class DropOffOptimizer:
             if not matches_target:
                 continue
 
-            # En iyi skoru güncelle
-            if score > best_score:
+            # Grouping kalite kontrolü: 4+ gruplar kesinlikle reddet
+            groups_of_4 = self.base_opt._find_groups_of_size(temp_seq, 4)
+            groups_of_5 = self.base_opt._find_groups_of_size(temp_seq, 5)
+            if groups_of_4 + groups_of_5 > 0:
+                continue
+
+            groups_of_3 = self.base_opt._find_groups_of_size(temp_seq, 3)
+
+            # Çok fazla 3'lü grup varsa reddet
+            if groups_of_3 > 4:
+                continue
+
+            # En iyi skoru güncelle (grouping kalitesi + fitness birlikte)
+            candidate_key = (groups_of_3, -score)  # Önce az 3'lü grup, sonra yüksek skor
+            best_key_current = (999, 0) if best_score < 0 else (getattr(self, '_best_g3', 999), -best_score)
+
+            if best_candidate is None or candidate_key < best_key_current:
                 best_score = score
+                self._best_g3 = groups_of_3
                 best_candidate = temp_seq
                 best_dropped_by_angle = {angle: sorted(positions) for angle, positions in dropped_by_angle.items()}
 
