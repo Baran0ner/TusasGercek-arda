@@ -7,6 +7,19 @@ body {
     linear-gradient(135deg, #e5e7eb 0%, #f1f5f9 40%, #fff1f2 100%);
 }
 
+/* Control Panel Toggle */
+#control-panel {
+  position: relative;
+  transition: margin-left 0.3s ease-in-out, width 0.3s ease-in-out;
+}
+
+#panel-open-btn {
+  position: fixed;
+  top: 1rem;
+  left: 1rem;
+  z-index: 50;
+}
+
 /* UI request: remove schematic zone management + merge from view */
 #zone-management-section {
   display: none !important;
