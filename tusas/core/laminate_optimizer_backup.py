@@ -1,9 +1,6 @@
 import random
 import time
 from typing import Dict, List, Tuple, Any, Optional
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from functools import lru_cache
-import os
 
 import numpy as np
 
@@ -671,202 +668,87 @@ class LaminateOptimizer:
 
         return best_skeleton
 
-    def _run_single_ga(self, args: Tuple) -> Tuple[List[int], float, int]:
-        """Single GA run for parallel processing.
-        Args: (skeleton, run_number, population_size, generations, stagnation_limit)
-        Returns: (best_sequence, best_fitness, run_number)
-        """
-        skeleton, run, population_size, generations, stagnation_limit = args
-
-        # Initial population from mutated skeleton
-        population = []
-        for i in range(population_size):
-            mutated = skeleton[:]
-            n_mutations = (run + 1) + (i // 15)
-            for _ in range(n_mutations):
-                # %30 balance-aware, %70 symmetry-preserving
-                if random.random() < 0.3:
-                    self._balance_aware_mutation(mutated)
-                else:
-                    self._symmetry_preserving_swap(mutated)
-            population.append(mutated)
-
-        best_seq = None
-        best_fit = -1
-        generations_without_improvement = 0
-
-        for _gen in range(generations):
-            scored = []
-            for ind in population:
-                fit, _ = self.calculate_fitness(ind)
-                scored.append((fit, ind))
-
-            scored.sort(reverse=True, key=lambda x: x[0])
-
-            if scored[0][0] > best_fit:
-                best_fit = scored[0][0]
-                best_seq = scored[0][1][:]
-                generations_without_improvement = 0
-            else:
-                generations_without_improvement += 1
-                # Adaptive early stopping: Stop earlier only for excellent solutions
-                if best_fit >= 94.0 and generations_without_improvement >= int(stagnation_limit * 0.6):
-                    # Exceptional solution, can stop a bit early
-                    break
-                elif best_fit >= 91.0 and generations_without_improvement >= int(stagnation_limit * 0.8):
-                    # Very good solution, stop slightly early
-                    break
-                elif generations_without_improvement >= stagnation_limit:
-                    # Normal stagnation limit
-                    break
-
-            # Elite %20 (daha fazla çeşitlilik)
-            elite_size = max(10, int(population_size * 0.20))
-            elite = [x[1][:] for x in scored[:elite_size]]
-            next_gen = elite[:]
-
-            while len(next_gen) < population_size:
-                parent = random.choice(elite)[:]
-                r = random.random()
-                if r < 0.35:
-                    if not self._grouping_aware_mutation(parent):
-                        self._symmetry_preserving_swap(parent)
-                elif r < 0.55:
-                    self._balance_aware_mutation(parent)
-                else:
-                    # Birden fazla swap (exploration)
-                    for _ in range(random.randint(1, 3)):
-                        self._symmetry_preserving_swap(parent)
-                next_gen.append(parent)
-
-            population = next_gen
-
-        return (best_seq, best_fit, run)
-
-    def _multi_start_ga(self, skeleton: List[int], n_runs: int = 7, parallel: bool = True) -> Tuple[List[int], float]:
-        """Multi-start GA: Skeleton'dan başlayarak farklı local optima'lara bakar.
-
-        Args:
-            skeleton: Starting sequence
-            n_runs: Number of independent GA runs
-            parallel: Use multiprocessing for parallel runs (default: True)
-        """
+    def _multi_start_ga(self, skeleton: List[int], n_runs: int = 7) -> Tuple[List[int], float]:
+        """Multi-start GA: Skeleton'dan başlayarak farklı local optima'lara bakar."""
         print("Phase 2: Multi-Start GA")
 
         skeleton_score, _ = self.calculate_fitness(skeleton)
         print("  Skeleton score: {:.2f}/100".format(skeleton_score))
 
-        # Optimized parameters: Balance speed and quality
-        # Population: 90 (sweet spot between 80-100)
-        population_size = 90
+        # Güçlendirilmiş parametreler
+        population_size = 100
         generations = 250
-        stagnation_limit = 22  # Balanced: not too aggressive
+        stagnation_limit = 25
 
         if self.total_plies > 40:
-            population_size = min(110, int(90 * (self.total_plies / 40.0)))  # Max 110
-            generations = min(300, int(250 * (self.total_plies / 40.0)))  # Max 300
+            population_size = min(140, int(100 * (self.total_plies / 40.0)))
+            generations = min(350, int(250 * (self.total_plies / 40.0)))
 
         best_global = skeleton[:]
         best_score = skeleton_score
 
-        if parallel and n_runs > 1:
-            # Paralel işleme: ThreadPoolExecutor (Windows uyumlu)
-            n_threads = min(os.cpu_count() or 4, n_runs)
-            print(f"  Running {n_runs} GA runs in parallel (using {n_threads} threads)")
+        for run in range(n_runs):
+            print("  Run {}/{}...".format(run + 1, n_runs), end=" ")
 
-            # Prepare arguments for each run
-            run_args = [
-                (skeleton[:], run, population_size, generations, stagnation_limit)
-                for run in range(n_runs)
-            ]
-
-            # Execute runs in parallel
-            with ThreadPoolExecutor(max_workers=n_threads) as executor:
-                futures = {executor.submit(self._run_single_ga, args): args[1] for args in run_args}
-                results = []
-                for future in as_completed(futures):
-                    run_num = futures[future]
-                    try:
-                        result = future.result()
-                        results.append(result)
-                    except Exception as e:
-                        print(f"  Run {run_num + 1} failed: {e}")
-
-            # Find best result
-            for best_seq, best_fit, run in results:
-                print(f"  Run {run + 1}/{n_runs}: Score: {best_fit:.2f}")
-                if best_fit > best_score:
-                    best_score = best_fit
-                    best_global = best_seq[:]
-        else:
-            # Serial işleme (orijinal kod)
-            for run in range(n_runs):
-                print("  Run {}/{}...".format(run + 1, n_runs), end=" ")
-
-                population = []
-                for i in range(population_size):
-                    mutated = skeleton[:]
-                    n_mutations = (run + 1) + (i // 15)
-                    for _ in range(n_mutations):
-                        # %30 balance-aware, %70 symmetry-preserving
-                        if random.random() < 0.3:
-                            self._balance_aware_mutation(mutated)
-                        else:
-                            self._symmetry_preserving_swap(mutated)
-                    population.append(mutated)
-
-                best_seq = None
-                best_fit = -1
-                generations_without_improvement = 0
-
-                for _gen in range(generations):
-                    scored = []
-                    for ind in population:
-                        fit, _ = self.calculate_fitness(ind)
-                        scored.append((fit, ind))
-
-                    scored.sort(reverse=True, key=lambda x: x[0])
-
-                    if scored[0][0] > best_fit:
-                        best_fit = scored[0][0]
-                        best_seq = scored[0][1][:]
-                        generations_without_improvement = 0
+            population = []
+            for i in range(population_size):
+                mutated = skeleton[:]
+                n_mutations = (run + 1) + (i // 15)
+                for _ in range(n_mutations):
+                    # %30 balance-aware, %70 symmetry-preserving
+                    if random.random() < 0.3:
+                        self._balance_aware_mutation(mutated)
                     else:
-                        generations_without_improvement += 1
-                        # Adaptive early stopping: Stop earlier only for excellent solutions
-                        if best_fit >= 94.0 and generations_without_improvement >= int(stagnation_limit * 0.6):
-                            break  # Exceptional solution
-                        elif best_fit >= 91.0 and generations_without_improvement >= int(stagnation_limit * 0.8):
-                            break  # Very good solution
-                        elif generations_without_improvement >= stagnation_limit:
-                            break  # Normal stagnation
+                        self._symmetry_preserving_swap(mutated)
+                population.append(mutated)
 
-                    # Elite %20 (daha fazla çeşitlilik)
-                    elite_size = max(10, int(population_size * 0.20))
-                    elite = [x[1][:] for x in scored[:elite_size]]
-                    next_gen = elite[:]
+            best_seq = None
+            best_fit = -1
+            generations_without_improvement = 0
 
-                    while len(next_gen) < population_size:
-                        parent = random.choice(elite)[:]
-                        r = random.random()
-                        if r < 0.35:
-                            if not self._grouping_aware_mutation(parent):
-                                self._symmetry_preserving_swap(parent)
-                        elif r < 0.55:
-                            self._balance_aware_mutation(parent)
-                        else:
-                            # Birden fazla swap (exploration)
-                            for _ in range(random.randint(1, 3)):
-                                self._symmetry_preserving_swap(parent)
-                        next_gen.append(parent)
+            for _gen in range(generations):
+                scored = []
+                for ind in population:
+                    fit, _ = self.calculate_fitness(ind)
+                    scored.append((fit, ind))
 
-                    population = next_gen
+                scored.sort(reverse=True, key=lambda x: x[0])
 
-                print("Score: {:.2f}".format(best_fit))
+                if scored[0][0] > best_fit:
+                    best_fit = scored[0][0]
+                    best_seq = scored[0][1][:]
+                    generations_without_improvement = 0
+                else:
+                    generations_without_improvement += 1
+                    if generations_without_improvement >= stagnation_limit:
+                        break
 
-                if best_fit > best_score:
-                    best_score = best_fit
-                    best_global = best_seq[:]
+                # Elite %20 (daha fazla çeşitlilik)
+                elite_size = max(10, int(population_size * 0.20))
+                elite = [x[1][:] for x in scored[:elite_size]]
+                next_gen = elite[:]
+
+                while len(next_gen) < population_size:
+                    parent = random.choice(elite)[:]
+                    r = random.random()
+                    if r < 0.35:
+                        if not self._grouping_aware_mutation(parent):
+                            self._symmetry_preserving_swap(parent)
+                    elif r < 0.55:
+                        self._balance_aware_mutation(parent)
+                    else:
+                        # Birden fazla swap (exploration)
+                        for _ in range(random.randint(1, 3)):
+                            self._symmetry_preserving_swap(parent)
+                    next_gen.append(parent)
+
+                population = next_gen
+
+            print("Score: {:.2f}".format(best_fit))
+
+            if best_fit > best_score:
+                best_score = best_fit
+                best_global = best_seq[:]
 
         print("  Best across runs: {:.2f}/100".format(best_score))
         return best_global, best_score

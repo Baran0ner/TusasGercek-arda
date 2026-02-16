@@ -595,6 +595,8 @@
                     class="font-mono text-cyan-400 font-bold">—</span></div>
                 <div id="p3-stats-thick" class="flex justify-between"><span class="text-slate-400">Kalınlık:</span><span
                     class="font-mono text-cyan-400 font-bold">—</span></div>
+                <div id="p3-stats-fps" class="flex justify-between border-t border-slate-700/50 pt-1 mt-1"><span class="text-slate-400">FPS:</span><span
+                    class="font-mono text-green-400 font-bold">—</span></div>
               </div>
             </div>
           </div>
@@ -4499,7 +4501,7 @@
     const TECH_BG_COLOR = 0x0f172a; // Slate-900
     const GRID_COLOR_1 = 0x1e293b; // Slate-800
     const GRID_COLOR_2 = 0x334155; // Slate-700
-    const BLOOM_PARAMS = { threshold: 0.85, strength: 0.6, radius: 0.2 };
+    const BLOOM_PARAMS = { threshold: 0.9, strength: 0.4, radius: 0.15 };  // Reduced for performance
 
     // ==================== CONSTANTS ====================
     const ANGLE_COLORS = {
@@ -4671,7 +4673,7 @@
       containerEl = container;
       tooltipEl = container.parentElement?.querySelector('#view3d-tooltip') || null;
 
-      renderer = new THREE.WebGLRenderer({ antialias: false, alpha: false, preserveDrawingBuffer: true, powerPreference: "high-performance" });
+      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, preserveDrawingBuffer: true, powerPreference: "high-performance" });
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
       renderer.setSize(container.clientWidth, container.clientHeight);
       renderer.setClearColor(TECH_BG_COLOR, 1);
@@ -5505,6 +5507,17 @@
       return mesh;
     }
 
+    // Geometry cache for performance
+    const p3GeometryCache = {};
+
+    function getBoxGeometry(w, h, d) {
+      const key = `box_${w.toFixed(3)}_${h.toFixed(3)}_${d.toFixed(3)}`;
+      if (!p3GeometryCache[key]) {
+        p3GeometryCache[key] = new THREE.BoxGeometry(w, h, d);
+      }
+      return p3GeometryCache[key];
+    }
+
     function initPanel3D(container) {
       p3Container = container;
       p3TooltipEl = document.getElementById('panel3d-tooltip');
@@ -5556,20 +5569,23 @@
       p3Controls.minDistance = 2;
       p3Controls.maxDistance = 100;
 
-      // Lights (High Contrast Tech)
-      const ambient = new THREE.AmbientLight(0xffffff, 0.4);
+      // Optimized Lighting (Balanced performance + quality)
+      const ambient = new THREE.AmbientLight(0xffffff, 0.6);  // Increased for better visibility
       p3Scene.add(ambient);
-      const keyLight = new THREE.DirectionalLight(0xffffff, 1.5);
+
+      const keyLight = new THREE.DirectionalLight(0xffffff, 1.2);  // Reduced intensity
       keyLight.position.set(10, 20, 10);
       keyLight.castShadow = true;
-      keyLight.shadow.mapSize.set(2048, 2048);
+      keyLight.shadow.mapSize.set(1024, 1024);  // Reduced from 2048 for performance
+      keyLight.shadow.camera.near = 0.5;
+      keyLight.shadow.camera.far = 50;
+      keyLight.shadow.camera.left = -15;
+      keyLight.shadow.camera.right = 15;
+      keyLight.shadow.camera.top = 15;
+      keyLight.shadow.camera.bottom = -15;
       p3Scene.add(keyLight);
-      const fillLight = new THREE.DirectionalLight(0x3b82f6, 0.8);
-      fillLight.position.set(-8, 5, -6);
-      p3Scene.add(fillLight);
-      const rimLight = new THREE.SpotLight(0x06b6d4, 2.0);
-      rimLight.position.set(0, 5, -20);
-      p3Scene.add(rimLight);
+
+      // Removed fillLight and rimLight for performance (environment map provides ambient)
 
       // Ground shadow plane
       const groundGeo = new THREE.PlaneGeometry(60, 60);
@@ -5583,11 +5599,29 @@
       p3ZoneGroup = new THREE.Group();
       p3Scene.add(p3ZoneGroup);
 
+      // FPS Tracking
+      let p3FrameCount = 0;
+      let p3LastTime = performance.now();
+      let p3CurrentFPS = 0;
+
       // Animate
       function animateP3() {
         requestAnimationFrame(animateP3);
         p3Controls.update();
         window.p3Composer.render();
+
+        // FPS calculation
+        p3FrameCount++;
+        const now = performance.now();
+        if (now >= p3LastTime + 1000) {
+          p3CurrentFPS = Math.round((p3FrameCount * 1000) / (now - p3LastTime));
+          p3FrameCount = 0;
+          p3LastTime = now;
+
+          // Update FPS display (if stats panel exists)
+          const fpsEl = document.querySelector('#p3-stats-fps .font-bold');
+          if (fpsEl) fpsEl.textContent = p3CurrentFPS;
+        }
       }
       animateP3();
 
@@ -5731,6 +5765,7 @@
       p3TooltipEl.classList.add('hidden');
 
       if (!zones || !zones.length) return;
+      if (!bounds || !bounds.length) return;
 
       // ---- Piksel -> World donusumu ----
       const PANEL_WORLD_SIZE = 14.0;
@@ -5750,6 +5785,7 @@
       }
 
       const panelGroup = new THREE.Group();
+      panelGroup.castShadow = true;  // Single shadow for entire panel
       p3ZoneGroup.add(panelGroup);
 
       const validZones = zones.filter(z => z && z.sequence && z.sequence.length > 0);
@@ -5978,30 +6014,30 @@
 
           } else {
             // --- FLAT MODE (EXISTING) ---
-            const geo = new THREE.BoxGeometry(effW, PLY_H, effD);
+            const geo = getBoxGeometry(effW, PLY_H, effD);  // Use cached geometry
             const fiberTex = fiberTextures[angleKey] || null;
-            const mat = new THREE.MeshPhysicalMaterial({
+            const mat = new THREE.MeshStandardMaterial({
               color: color,
-              roughness: 0.28,
+              roughness: 0.4,
               metalness: 0.0,
-              clearcoat: 0.35,
-              clearcoatRoughness: 0.3,
               emissive: color,
-              emissiveIntensity: 0.08,
+              emissiveIntensity: 0.05,
             });
-            if (fiberTex) { mat.map = fiberTex; mat.map.needsUpdate = true; }
+            if (fiberTex) {
+              mat.map = fiberTex;
+              mat.map.needsUpdate = true;
+              // Anisotropic filtering for better texture quality
+              mat.map.anisotropy = p3Renderer.capabilities.getMaxAnisotropy();
+            }
 
             mesh = new THREE.Mesh(geo, mat);
             mesh.position.set(effCx, baseY + PLY_H / 2, effCz);
-            mesh.castShadow = true;
-            mesh.receiveShadow = true;
+            mesh.castShadow = false;  // Disable individual ply shadows for performance
+            mesh.receiveShadow = false;
             panelGroup.add(mesh);
 
-            const edgesGeo = new THREE.EdgesGeometry(geo);
-            const edgesMat = new THREE.LineBasicMaterial({ color: 0x64748b, opacity: 0.05, transparent: true });
-            edges = new THREE.LineSegments(edgesGeo, edgesMat);
-            edges.position.copy(mesh.position);
-            panelGroup.add(edges);
+            // Removed EdgesGeometry for performance - zone borders provide visual separation
+            edges = null;
           }
 
           p3ZoneMeshes.push({
