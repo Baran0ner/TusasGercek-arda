@@ -148,6 +148,15 @@ def optimize_multi_zone():
 
     elapsed = time.time() - start_time
 
+    # Bağlantısız zone hatası kontrolü
+    if not result.get("success") and result.get("disconnected_zones"):
+        return jsonify({
+            "error": result["error"],
+            "disconnected_zones": result["disconnected_zones"],
+            "root_index": result.get("root_index", 0),
+            "neighbor_graph": result.get("neighbor_graph", []),
+        }), 400
+
     # Sonuçları frontend için formatla
     zone_results = []
     for zone_data in result.get("zones", []):
@@ -175,6 +184,8 @@ def optimize_multi_zone():
         "root_index": result.get("root_index", 0),
         "weight": weight_info,
         "ramp_checks": ramp_checks,
+        "drop_off_tree": result.get("drop_off_tree", {}),
+        "neighbor_graph": result.get("neighbor_graph", []),
         "stats": {
             "duration_seconds": round(elapsed, 2),
             "total_iterations": result.get("total_iterations", 1),
@@ -247,6 +258,9 @@ def optimize_multi_zone_stream():
                 "root_index": result.get("root_index", 0),
                 "weight": result.get("weight", {}),
                 "ramp_checks": result.get("ramp_checks", []),
+                "drop_off_tree": result.get("drop_off_tree", {}),
+                "neighbor_graph": result.get("neighbor_graph", []),
+                "disconnected_zones": result.get("disconnected_zones", []),
                 "stats": {
                     "duration_seconds": round(elapsed, 2),
                     "total_iterations": result.get("total_iterations", 1),

@@ -10,7 +10,7 @@ Fiziksel kısıtlar:
 """
 
 import math
-from collections import Counter
+from collections import Counter, deque
 from typing import Dict, List, Tuple, Any, Optional
 
 from .laminate_optimizer import LaminateOptimizer
@@ -140,6 +140,81 @@ class MultiZoneOptimizer:
         
         return False
 
+    # ===== Komşuluk Grafiği =====
+    def _check_connectivity(self) -> Tuple[bool, List[int]]:
+        """
+        BFS ile root zone'dan tüm zone'lara ulaşılabilirlik kontrolü.
+
+        Returns:
+            (all_connected, disconnected_indices)
+        """
+        if not self.zone_neighbors:
+            return True, []
+
+        n = len(self.zones_config)
+        visited = set()
+        queue = deque([self.root_index])
+        visited.add(self.root_index)
+
+        while queue:
+            current = queue.popleft()
+            for neighbor in self.zone_neighbors[current]:
+                if neighbor not in visited:
+                    visited.add(neighbor)
+                    queue.append(neighbor)
+
+        disconnected = [i for i in range(n) if i not in visited]
+        return len(disconnected) == 0, disconnected
+
+    def _build_bfs_drop_order(self) -> Tuple[List[int], Dict[int, int]]:
+        """
+        BFS ile root'tan başlayarak drop-off sırasını ve kaynak zone'ları belirle.
+
+        Her zone için kaynak: ziyaret edilmiş komşular arasında
+        kalın olan tercih edilir, eşitse ply farkı en az olan seçilir.
+
+        Returns:
+            (bfs_order, parent_map)
+            bfs_order: root hariç, BFS sırasında zone index listesi
+            parent_map: {zone_idx: source_zone_idx}
+        """
+        visited = set([self.root_index])
+        queue = deque([self.root_index])
+        bfs_order = []
+        parent_map = {}
+
+        while queue:
+            current = queue.popleft()
+            for neighbor in self.zone_neighbors[current]:
+                if neighbor not in visited:
+                    visited.add(neighbor)
+                    queue.append(neighbor)
+                    bfs_order.append(neighbor)
+
+                    # En uygun kaynak komşuyu bul
+                    best_source = None
+                    best_diff = float('inf')
+                    best_is_thicker = False
+
+                    for nb in self.zone_neighbors[neighbor]:
+                        if nb not in visited and nb != current:
+                            continue
+                        if nb not in visited:
+                            continue
+                        is_thicker = self.zone_totals[nb] >= self.zone_totals[neighbor]
+                        diff = abs(self.zone_totals[neighbor] - self.zone_totals[nb])
+                        # Kalın komşu her zaman öncelikli; eşitse en az fark
+                        if best_source is None or \
+                           (is_thicker and not best_is_thicker) or \
+                           (is_thicker == best_is_thicker and diff < best_diff):
+                            best_diff = diff
+                            best_source = nb
+                            best_is_thicker = is_thicker
+
+                    parent_map[neighbor] = best_source if best_source is not None else current
+
+        return bfs_order, parent_map
+
     # ===== Ağırlık Hesaplama =====
     def calculate_total_weight(self, zone_results: Dict[int, Dict] = None) -> Dict[str, Any]:
         """
@@ -253,13 +328,33 @@ class MultiZoneOptimizer:
 
         root_updated = False
         total_iterations = 0
-        
+        parent_map = {}
+
         # Callback wrapper
         def report_progress(val, msg=""):
             if progress_callback:
                 progress_callback({"progress": val, "message": msg})
 
         report_progress(5, "Optimizasyon baslatiliyor...")
+
+        # Bağlantı kontrolü (bounds varsa)
+        if self.zone_neighbors:
+            connected, disconnected = self._check_connectivity()
+            if not connected:
+                disc_labels = [f"Zone {i+1}" for i in disconnected]
+                print(f"HATA: Baglantisiz zone'lar: {', '.join(disc_labels)}")
+                return {
+                    "success": False,
+                    "error": f"Baglantisiz zone'lar tespit edildi: {', '.join(disc_labels)}. "
+                             f"Tum zone'lar root zone'a (Zone {self.root_index+1}) komsu yol ile "
+                             f"baglanmalidir.",
+                    "disconnected_zones": disconnected,
+                    "zones": [],
+                    "transitions": [],
+                    "root_index": self.root_index,
+                    "drop_off_tree": {},
+                    "neighbor_graph": [list(nb) for nb in self.zone_neighbors],
+                }
         
         for attempt in range(self.MAX_ROOT_RETRIES):
             total_iterations += 1
@@ -291,16 +386,28 @@ class MultiZoneOptimizer:
             transitions = []
             drop_success = True
 
-            # 2. Diğer zone'ları drop-off ile türet (kalından inceye sırayla)
-            for i, zone_idx in enumerate(self.sorted_zone_indices):
-                if zone_idx == self.root_index:
-                    continue  # Root zaten optimize edildi
+            # 2. BFS ile komşuluk grafiğinde drop-off sırası belirle
+            if self.zone_neighbors:
+                bfs_order, parent_map = self._build_bfs_drop_order()
+            else:
+                # Komşuluk bilgisi yoksa eski davranışa geri dön (backward compat)
+                bfs_order = [idx for idx in self.sorted_zone_indices if idx != self.root_index]
+                parent_map = {}
+                for idx in self.sorted_zone_indices:
+                    if idx == self.root_index:
+                        continue
+                    prev_pos = self.sorted_zone_indices.index(idx) - 1
+                    parent_map[idx] = self.sorted_zone_indices[prev_pos]
 
+            print(f"BFS drop-off sirasi: {[f'Zone {i+1}' for i in bfs_order]}")
+            print(f"Kaynak haritasi: {{{', '.join(f'Zone {k+1} <- Zone {v+1}' for k, v in parent_map.items())}}}")
+
+            for i, zone_idx in enumerate(bfs_order):
                 target_config = self.zones_config[zone_idx]
                 target_total = sum(target_config.values())
-                
-                # Kaynak zone'u bul (bir önceki kalın zone)
-                source_idx = self.sorted_zone_indices[self.sorted_zone_indices.index(zone_idx) - 1]
+
+                # Kaynak zone'u komşuluk grafiğinden al
+                source_idx = parent_map[zone_idx]
                 source_result = zone_results[source_idx]
                 source_seq = source_result["sequence"]
                 
@@ -353,11 +460,8 @@ class MultiZoneOptimizer:
                     print(f"Zone {zone_idx + 1} skor: {fitness:.2f}/100")
                     
                     # Calculate progress for zones (25% to 90%)
-                    total_zones = len(self.sorted_zone_indices) - 1 # excluding root
+                    total_zones = len(bfs_order)
                     if total_zones > 0:
-                        # i is 0-indexed in loop, but loop skips root, so we track count
-                        # Actually enumerate gives 0, 1, 2...
-                        # Let's use simple logic:
                         percent_per_zone = 65.0 / total_zones
                         current_progress = 25 + ((i + 1) * percent_per_zone)
                         report_progress(int(current_progress), f"Zone {zone_idx + 1} tamamlandi ({fitness:.1f})")
@@ -405,7 +509,9 @@ class MultiZoneOptimizer:
                     "total_iterations": total_iterations,
                     "root_index": self.root_index,
                     "weight": weight_info,
-                    "ramp_checks": ramp_checks
+                    "ramp_checks": ramp_checks,
+                    "drop_off_tree": parent_map,
+                    "neighbor_graph": [list(nb) for nb in self.zone_neighbors] if self.zone_neighbors else [],
                 }
             else:
                 # Drop-off başarısız - root'u güncelle
@@ -425,7 +531,9 @@ class MultiZoneOptimizer:
             "root_updated": root_updated,
             "total_iterations": total_iterations,
             "root_index": self.root_index,
-            "error": "Maksimum deneme sayısı aşıldı"
+            "error": "Maksimum deneme sayısı aşıldı",
+            "drop_off_tree": parent_map,
+            "neighbor_graph": [list(nb) for nb in self.zone_neighbors] if self.zone_neighbors else [],
         }
 
     def get_zone_summary(self) -> str:

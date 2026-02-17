@@ -114,7 +114,7 @@
             title="Bölge ekle"><span>+</span> Bölge Ekle</button>
         </div>
 
-        <div class="pt-2 sticky bottom-0 bg-gradient-to-t from-slate-800 to-transparent pb-2">
+        <div class="pt-2 pb-2">
           <button type="submit" id="optimize-all-btn" class="w-full button-with-icon"
             style="font-size:0.95rem; padding:8px 16px; margin:12px 0;">
             <span class="text">Optimize Et</span>
@@ -936,6 +936,30 @@
     let pdDrawStart = null;
     let pdDragging = false;
     let pdDragOffset = null;
+    let pdDropOffTree = null;  // Optimize sonrası: {childIdx: parentIdx, ...}
+    window._disconnectedZones = null; // Bağlantısız zone index'leri
+
+    // ===== Komşuluk (Adjacency) Hesaplama =====
+    function rectsAdjacent(r1, r2, threshold) {
+      const x1 = r1.x, y1 = r1.y, x1b = r1.x + r1.w, y1b = r1.y + r1.h;
+      const x2 = r2.x, y2 = r2.y, x2b = r2.x + r2.w, y2b = r2.y + r2.h;
+      const hOverlap = Math.max(0, Math.min(x1b, x2b) - Math.max(x1, x2));
+      const vOverlap = Math.max(0, Math.min(y1b, y2b) - Math.max(y1, y2));
+      const hGap = Math.max(x1, x2) - Math.min(x1b, x2b);
+      if (vOverlap > 0 && hGap >= 0 && hGap <= threshold) return true;
+      const vGap = Math.max(y1, y2) - Math.min(y1b, y2b);
+      if (hOverlap > 0 && vGap >= 0 && vGap <= threshold) return true;
+      return false;
+    }
+    function computeNeighborPairs(regions, threshold) {
+      const pairs = [];
+      for (let i = 0; i < regions.length; i++) {
+        for (let j = i + 1; j < regions.length; j++) {
+          if (rectsAdjacent(regions[i], regions[j], threshold)) pairs.push([i, j]);
+        }
+      }
+      return pairs;
+    }
 
     // Undo/Redo stacks
     const pdUndoStack = [];
@@ -1217,6 +1241,74 @@
         pdCtx.fillText(txt2, cx, cy + 10);
         pdCtx.restore();
       });
+
+      // --- Komşuluk çizgileri (gri, kesikli) ---
+      if (pdRegions.length >= 2) {
+        const neighborPairs = computeNeighborPairs(pdRegions, 15);
+        pdCtx.save();
+        pdCtx.strokeStyle = '#94a3b8';
+        pdCtx.lineWidth = 1.5;
+        pdCtx.setLineDash([6, 4]);
+        pdCtx.globalAlpha = 0.5;
+        neighborPairs.forEach(([i, j]) => {
+          const r1 = pdRegions[i], r2 = pdRegions[j];
+          const cx1 = r1.x + r1.w / 2, cy1 = r1.y + r1.h / 2;
+          const cx2 = r2.x + r2.w / 2, cy2 = r2.y + r2.h / 2;
+          pdCtx.beginPath();
+          pdCtx.moveTo(cx1, cy1);
+          pdCtx.lineTo(cx2, cy2);
+          pdCtx.stroke();
+        });
+        pdCtx.restore();
+      }
+
+      // --- Bağlantısız zone uyarısı (kırmızı kesikli border) ---
+      if (pdRegions.length >= 2 && window._disconnectedZones && window._disconnectedZones.length > 0) {
+        pdCtx.save();
+        pdCtx.strokeStyle = '#ef4444';
+        pdCtx.lineWidth = 3;
+        pdCtx.setLineDash([8, 4]);
+        window._disconnectedZones.forEach(idx => {
+          if (idx < pdRegions.length) {
+            const r = pdRegions[idx];
+            pdCtx.strokeRect(r.x, r.y, r.w, r.h);
+          }
+        });
+        pdCtx.restore();
+      }
+
+      // --- Drop-off hiyerarşi okları (yeşil, optimize sonrası) ---
+      if (pdDropOffTree && Object.keys(pdDropOffTree).length > 0) {
+        pdCtx.save();
+        pdCtx.strokeStyle = '#059669';
+        pdCtx.fillStyle = '#059669';
+        pdCtx.lineWidth = 2.5;
+        pdCtx.setLineDash([]);
+        pdCtx.globalAlpha = 0.8;
+        Object.entries(pdDropOffTree).forEach(([childStr, parentIdx]) => {
+          const childIdx = parseInt(childStr);
+          if (childIdx >= pdRegions.length || parentIdx >= pdRegions.length) return;
+          const parent = pdRegions[parentIdx];
+          const child = pdRegions[childIdx];
+          const px = parent.x + parent.w / 2, py = parent.y + parent.h / 2;
+          const cx = child.x + child.w / 2, cy = child.y + child.h / 2;
+          // Çizgi
+          pdCtx.beginPath();
+          pdCtx.moveTo(px, py);
+          pdCtx.lineTo(cx, cy);
+          pdCtx.stroke();
+          // Ok ucu
+          const angle = Math.atan2(cy - py, cx - px);
+          const arrowLen = 10;
+          pdCtx.beginPath();
+          pdCtx.moveTo(cx, cy);
+          pdCtx.lineTo(cx - arrowLen * Math.cos(angle - 0.4), cy - arrowLen * Math.sin(angle - 0.4));
+          pdCtx.lineTo(cx - arrowLen * Math.cos(angle + 0.4), cy - arrowLen * Math.sin(angle + 0.4));
+          pdCtx.closePath();
+          pdCtx.fill();
+        });
+        pdCtx.restore();
+      }
 
       // Hint
       if (pdHint) pdHint.style.display = pdRegions.length === 0 ? 'flex' : 'none';
@@ -1542,9 +1634,22 @@
         loadingOverlay.classList.add('hidden');
 
         if (data.error) {
-          alert(`Hata: ${data.error}`);
+          if (data.disconnected_zones && data.disconnected_zones.length > 0) {
+            window._disconnectedZones = data.disconnected_zones;
+            pdDropOffTree = null;
+            pdRender();
+            const labels = data.disconnected_zones.map(i => pdRegions[i]?.label || `Zone ${i+1}`).join(', ');
+            alert(`Baglantisiz zone'lar: ${labels}\nTum zone'lar birbirine komsu olmalidir.`);
+          } else {
+            alert(`Hata: ${data.error}`);
+          }
           return;
         }
+
+        // Store drop-off tree for 2D canvas overlay
+        pdDropOffTree = data.drop_off_tree || null;
+        window._disconnectedZones = null;
+        pdRender();
 
         // Show results
         multiZoneResults = data;
@@ -1559,6 +1664,8 @@
 
     // Back to designer button
     document.getElementById('back-to-designer')?.addEventListener('click', () => {
+      pdDropOffTree = null;
+      window._disconnectedZones = null;
       resultsSection.classList.add('hidden');
       if (emptyState) emptyState.style.display = '';
       const rwPanel = document.getElementById('rule-weights-panel');
@@ -1831,9 +1938,22 @@
         loadingOverlay.classList.add('hidden');
 
         if (data.error) {
-          alert(`Hata: ${data.error}`);
+          if (data.disconnected_zones && data.disconnected_zones.length > 0) {
+            window._disconnectedZones = data.disconnected_zones;
+            pdDropOffTree = null;
+            pdRender();
+            const labels = data.disconnected_zones.map(i => pdRegions[i]?.label || `Zone ${i+1}`).join(', ');
+            alert(`Baglantisiz zone'lar: ${labels}\nTum zone'lar birbirine komsu olmalidir.`);
+          } else {
+            alert(`Hata: ${data.error}`);
+          }
           return;
         }
+
+        // Store drop-off tree for 2D canvas overlay
+        pdDropOffTree = data.drop_off_tree || null;
+        window._disconnectedZones = null;
+        pdRender();
 
         // Sonuçları göster
         multiZoneResults = data;
@@ -1927,6 +2047,7 @@
         const _bounds = (typeof pdRegions !== 'undefined' && pdRegions.length > 0)
           ? pdRegions.map(r => ({ x: r.x, y: r.y, w: r.w, h: r.h, label: r.label, color: r.color }))
           : null;
+        window._view3d._dropOffTree = data.drop_off_tree || {};
         window._view3d.updatePanel3D(data.zones, _bounds, data.weight, data.ramp_checks);
 
         // Tab switching
@@ -7528,7 +7649,12 @@
         const plyText = `${zone.ply_count} PLY`;
         const thicknessMM = (zone.ply_count * 0.125).toFixed(2);
         const fitnessText = zone.fitness ? ` | ${zone.fitness.toFixed(1)}/100` : '';
-        const rootTag = zone.is_root ? ' [ROOT]' : '';
+        const dropTree = window._view3d?._dropOffTree || {};
+        const sourceIdx = dropTree[String(bIdx)];
+        const sourceTag = (sourceIdx !== undefined && sourceIdx !== null && bounds[sourceIdx])
+          ? ` < ${bounds[sourceIdx].label || ('Zone ' + (sourceIdx + 1))}`
+          : '';
+        const rootTag = zone.is_root ? ' [ROOT]' : sourceTag;
 
         // Main label with TUSAŞ branding
         const labelText = `${zLabel}${rootTag}\n${plyText} • ${thicknessMM}mm${fitnessText}`;
@@ -7574,6 +7700,53 @@
           warnSp.position.set(mid.x, mid.y + 0.25, mid.z);
           warnSp.scale.set(1.8, 0.35, 1);
           panelGroup.add(warnSp);
+        });
+      }
+
+      // ---- Drop-off hiyerarşi okları (yeşil) ----
+      const dropTree3D = window._view3d?._dropOffTree || {};
+      if (Object.keys(dropTree3D).length > 0) {
+        Object.entries(dropTree3D).forEach(([childStr, parentIdx]) => {
+          const childIdx = parseInt(childStr);
+          const zwP = zoneWorld[parentIdx];
+          const zwC = zoneWorld[childIdx];
+          if (!zwP || !zwC) return;
+          const topP = (zoneMap[parentIdx]?.ply_count || 0) * (PLY_H + PLY_GAP);
+          const topC = (zoneMap[childIdx]?.ply_count || 0) * (PLY_H + PLY_GAP);
+          const arrowY = Math.max(topP, topC) + 0.2;
+
+          // Çizgi parent → child
+          const p1 = new THREE.Vector3(zwP.cx, arrowY, zwP.cz);
+          const p2 = new THREE.Vector3(zwC.cx, arrowY, zwC.cz);
+          const arrowGeo = new THREE.BufferGeometry().setFromPoints([p1, p2]);
+          const arrowMat = new THREE.LineBasicMaterial({ color: 0x059669, linewidth: 2 });
+          panelGroup.add(new THREE.Line(arrowGeo, arrowMat));
+
+          // Ok ucu (cone) child ucunda
+          const dir = new THREE.Vector3().subVectors(p2, p1);
+          const len = dir.length();
+          if (len > 0.01) {
+            dir.normalize();
+            const coneGeo = new THREE.ConeGeometry(0.1, 0.25, 8);
+            const coneMat = new THREE.MeshBasicMaterial({ color: 0x059669 });
+            const cone = new THREE.Mesh(coneGeo, coneMat);
+            // Cone'u child ucuna yerleştir
+            cone.position.copy(p2);
+            // Cone'un yönünü ayarla (default Y+ yönünde, dir yönüne çevir)
+            const up = new THREE.Vector3(0, 1, 0);
+            const quat = new THREE.Quaternion().setFromUnitVectors(up, dir);
+            cone.quaternion.copy(quat);
+            panelGroup.add(cone);
+          }
+
+          // Orta noktaya etiket
+          const mid = new THREE.Vector3().addVectors(p1, p2).multiplyScalar(0.5);
+          const pLabel = bounds[parentIdx]?.label || `Z${parentIdx+1}`;
+          const cLabel = bounds[childIdx]?.label || `Z${childIdx+1}`;
+          const trSp = createTextSprite(`${pLabel} → ${cLabel}`, false, true);
+          trSp.position.set(mid.x, arrowY + 0.18, mid.z);
+          trSp.scale.set(1.6, 0.3, 1);
+          panelGroup.add(trSp);
         });
       }
 
