@@ -1,0 +1,230 @@
+/* Softer, less eye-straining enterprise background (white + red + charcoal accents) */
+body {
+  background:
+    radial-gradient(900px circle at 12% 6%, rgba(15, 23, 42, 0.18), transparent 58%),
+    radial-gradient(900px circle at 92% 10%, rgba(225, 29, 72, 0.14), transparent 55%),
+    radial-gradient(900px circle at 70% 100%, rgba(0, 0, 0, 0.10), transparent 55%),
+    linear-gradient(135deg, #e5e7eb 0%, #f1f5f9 40%, #fff1f2 100%);
+}
+
+/* Control Panel Toggle */
+#control-panel {
+  position: relative;
+  transition: margin-left 0.3s ease-in-out, width 0.3s ease-in-out;
+}
+
+#panel-open-btn {
+  position: fixed;
+  top: 1rem;
+  left: 1rem;
+  z-index: 50;
+}
+
+/* UI request: remove schematic zone management + merge from view */
+#zone-management-section {
+  display: none !important;
+}
+
+/* Button style: "button-with-icon" (user-provided design, enterprise-tuned) */
+.button-with-icon {
+  font-size: 1.5rem;
+  color: #fafafa;
+  text-transform: uppercase;
+  padding: 10px 20px;
+  border-radius: 10px;
+  border: 2px solid #fafafa;
+  background: #252525;
+  box-shadow: 3px 3px #fafafa;
+  cursor: pointer;
+  margin: 35px 0;
+
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  font-family: inherit;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  outline: none;
+  user-select: none;
+  position: relative;
+  transition: 150ms all ease-in-out;
+}
+
+.button-with-icon:hover {
+  background: #333;
+}
+
+.button-with-icon:active {
+  box-shadow: none;
+  transform: translate(3px, 3px);
+}
+
+.button-with-icon:focus-visible {
+  outline: 2px solid rgba(59, 130, 246, 0.65);
+  outline-offset: 3px;
+}
+
+.button-with-icon:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.button-with-icon .icon {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  transition: all 0.5s ease-in-out;
+}
+
+.button-with-icon .text {
+  transition: all 0.5s ease-in-out;
+  white-space: nowrap;
+}
+
+/* Make links look like buttons */
+a.button-with-icon {
+  text-decoration: none;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.dragging {
+  opacity: 0.5 !important;
+  cursor: grabbing !important;
+}
+
+.drop-zone-active {
+  background-color: rgba(59, 130, 246, 0.12) !important;
+  /* blue-500 */
+  border: 2px solid rgb(59, 130, 246) !important;
+}
+
+/* Düşürülen katmanlar için özel stil */
+.line-through {
+  position: relative;
+}
+
+.line-through::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 2px;
+  background-color: rgba(248, 113, 113, 0.8);
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+/* Zone Diagram Animasyonları */
+@keyframes drawPath {
+  from {
+    stroke-dashoffset: 1000;
+  }
+
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes fadeInScale {
+  from {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes pulse {
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.7;
+  }
+}
+
+.transition-path {
+  fill: none;
+  stroke-width: 3;
+  stroke-dasharray: 1000;
+  stroke-dashoffset: 1000;
+  animation: drawPath 1.8s ease-out forwards;
+  filter: drop-shadow(0 0 4px currentColor);
+  transition: all 0.3s ease;
+  opacity: 0.9;
+}
+
+.transition-path:hover {
+  stroke-width: 4;
+  opacity: 1;
+  filter: drop-shadow(0 0 8px currentColor);
+}
+
+.zone-box {
+  animation: fadeInScale 0.5s ease-out;
+  transition: all 0.3s ease;
+  cursor: pointer;
+}
+
+.zone-hover-group:hover .zone-box {
+  transform: scale(1.08);
+  stroke-width: 3.5;
+  filter: drop-shadow(0 6px 16px rgba(0, 0, 0, 0.5));
+}
+
+.zone-hover-group:hover text {
+  fill: #fff !important;
+}
+
+.zone-pulse {
+  animation: pulse 2s infinite;
+}
+
+/* SVG container scroll için */
+#zone-diagram svg {
+  min-width: 100%;
+}
+
+/* Fullscreen fix for 3D views */
+#stacking-pane:fullscreen,
+#panel3d-pane:fullscreen {
+  display: flex !important;
+  flex-direction: column;
+  background-color: #0f172a;
+  /* Slate 900 matches canvas bg */
+  padding: 20px;
+  overflow: hidden;
+}
+
+#stacking-pane:fullscreen #view3d-container,
+#panel3d-pane:fullscreen #panel3d-container {
+  height: auto !important;
+  flex: 1;
+  border: none;
+}
+
+/* Switch Button in Fullscreen */
+:fullscreen .fullscreen-switch-btn {
+  display: inline-flex !important;
+}
